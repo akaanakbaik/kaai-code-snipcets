@@ -1,0 +1,414 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: Kaai Code Snippet API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: snippets
+    description: Code snippet operations
+  - name: webhook
+    description: Bot webhook operations
+  - name: stats
+    description: Statistics operations
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /snippets:
+    get:
+      operationId: listSnippets
+      tags: [snippets]
+      summary: List approved snippets
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: language
+          in: query
+          schema:
+            type: string
+        - name: tag
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 12
+      responses:
+        "200":
+          description: List of snippets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnippetListResponse"
+
+    post:
+      operationId: createSnippet
+      tags: [snippets]
+      summary: Upload a new snippet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSnippetBody"
+      responses:
+        "201":
+          description: Snippet created (pending approval)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snippet"
+        "409":
+          description: Duplicate snippet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /snippets/{id}:
+    get:
+      operationId: getSnippet
+      tags: [snippets]
+      summary: Get snippet by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Snippet detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snippet"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /snippets/{id}/approve:
+    post:
+      operationId: approveSnippet
+      tags: [snippets]
+      summary: Approve a pending snippet (bot only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Snippet approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snippet"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /snippets/{id}/reject:
+    post:
+      operationId: rejectSnippet
+      tags: [snippets]
+      summary: Reject a pending snippet (bot only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: Snippet rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snippet"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /snippets/pending:
+    get:
+      operationId: listPendingSnippets
+      tags: [snippets]
+      summary: List pending snippets (admin)
+      responses:
+        "200":
+          description: List of pending snippets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnippetListResponse"
+
+  /stats:
+    get:
+      operationId: getStats
+      tags: [stats]
+      summary: Get platform statistics
+      responses:
+        "200":
+          description: Platform stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Stats"
+
+  /stats/languages:
+    get:
+      operationId: getLanguageStats
+      tags: [stats]
+      summary: Get snippet counts by language
+      responses:
+        "200":
+          description: Language breakdown
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LanguageStat"
+
+  /stats/recent:
+    get:
+      operationId: getRecentSnippets
+      tags: [stats]
+      summary: Get recently approved snippets
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 5
+      responses:
+        "200":
+          description: Recent snippets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Snippet"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    Snippet:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        language:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        code:
+          type: string
+        authorName:
+          type: string
+        authorEmail:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, rejected]
+        rejectReason:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - title
+        - description
+        - language
+        - tags
+        - code
+        - authorName
+        - authorEmail
+        - status
+        - createdAt
+        - updatedAt
+
+    SnippetListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Snippet"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+        totalPages:
+          type: integer
+      required:
+        - data
+        - total
+        - page
+        - limit
+        - totalPages
+
+    CreateSnippetBody:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        language:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+          minItems: 1
+        code:
+          type: string
+          minLength: 1
+        authorName:
+          type: string
+          minLength: 1
+        authorEmail:
+          type: string
+          format: email
+      required:
+        - title
+        - description
+        - language
+        - tags
+        - code
+        - authorName
+        - authorEmail
+
+    Stats:
+      type: object
+      properties:
+        totalSnippets:
+          type: integer
+        pendingSnippets:
+          type: integer
+        approvedSnippets:
+          type: integer
+        rejectedSnippets:
+          type: integer
+        totalAuthors:
+          type: integer
+        totalLanguages:
+          type: integer
+      required:
+        - totalSnippets
+        - pendingSnippets
+        - approvedSnippets
+        - rejectedSnippets
+        - totalAuthors
+        - totalLanguages
+
+    LanguageStat:
+      type: object
+      properties:
+        language:
+          type: string
+        count:
+          type: integer
+      required:
+        - language
+        - count
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+      required:
+        - error
+        - message
