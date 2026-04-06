@@ -4,11 +4,10 @@ import {
   timestamp,
   boolean,
   integer,
-  bigint,
   pgEnum,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 // ─── Snippets ─────────────────────────────────────────────────────────────────
 
