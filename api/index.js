@@ -1,15 +1,18 @@
-'use strict';
-
 /**
  * Vercel Serverless Function — handles /api/*
  *
  * The Express backend is pre-compiled to CommonJS by
  * scripts/build-server.mjs during Vercel's buildCommand.
  * Output is at _server/app.cjs (project root).
+ *
+ * Uses createRequire (ESM → CJS interop) to load the bundle.
  */
 
-const path = require("path");
+import { createRequire } from "module";
+import path from "path";
+import { fileURLToPath } from "url";
 
+const require = createRequire(import.meta.url);
 const appPath = path.join(process.cwd(), "_server", "app.cjs");
 
 console.log("[api/index.js] Loading Express bundle from:", appPath);
@@ -41,7 +44,7 @@ try {
   console.error(err.stack);
 }
 
-module.exports = function handler(req, res) {
+export default function handler(req, res) {
   if (!app) {
     console.error("[api/index.js] Handler called but app failed to initialize");
     res.statusCode = 500;
@@ -61,4 +64,4 @@ module.exports = function handler(req, res) {
       res.end(JSON.stringify({ error: "Internal Server Error" }));
     }
   }
-};
+}
