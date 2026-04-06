@@ -1,5 +1,5 @@
 {
-  "buildCommand": "pnpm --filter @workspace/kaai-code-snippet run build",
+  "buildCommand": "node artifacts/api-server/build-vercel.mjs && pnpm --filter @workspace/kaai-code-snippet run build",
   "outputDirectory": "artifacts/kaai-code-snippet/dist/public",
   "installCommand": "pnpm install",
   "framework": null,
