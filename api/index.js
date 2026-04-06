@@ -4,59 +4,61 @@
  * Vercel Serverless Function — handles /api/*
  *
  * The Express backend is pre-compiled to CommonJS by
- * artifacts/api-server/build-vercel.mjs during Vercel's buildCommand.
- * Output is at _dist_server/app.js (project root) so Vercel's file
- * tracer reliably includes it in the serverless function bundle.
+ * scripts/build-server.mjs during Vercel's buildCommand.
+ * Output is at _server/app.cjs (project root).
  */
 
-console.log('[api/index.js] Loading Express bundle...');
+const path = require("path");
+
+const appPath = path.join(process.cwd(), "_server", "app.cjs");
+
+console.log("[api/index.js] Loading Express bundle from:", appPath);
+console.log("[api/index.js] process.cwd():", process.cwd());
+console.log("[api/index.js] NODE_ENV:", process.env.NODE_ENV);
+console.log("[api/index.js] DATABASE_URL set:", !!process.env.DATABASE_URL);
 
 let app;
 
 try {
-  const mod = require('../_dist_server/app.js');
+  const mod = require(appPath);
 
-  console.log('[api/index.js] Bundle loaded, mod type:', typeof mod);
-  console.log('[api/index.js] mod.default type:', typeof mod.default);
-
-  if (typeof mod === 'function') {
+  if (typeof mod === "function") {
     app = mod;
-  } else if (typeof mod.default === 'function') {
+  } else if (typeof mod.default === "function") {
     app = mod.default;
-  } else if (mod && mod.app && typeof mod.app === 'function') {
+  } else if (mod && mod.app && typeof mod.app === "function") {
     app = mod.app;
   } else {
     throw new Error(
-      'App export not found. mod type=' + typeof mod +
-      ', mod.default type=' + typeof (mod && mod.default)
+      "App export not found. mod type=" + typeof mod +
+      ", mod.default type=" + typeof (mod && mod.default)
     );
   }
 
-  console.log('[api/index.js] Express app resolved successfully, type:', typeof app);
+  console.log("✅ Express app resolved, type:", typeof app);
 } catch (err) {
-  console.error('[api/index.js] FATAL: Failed to load Express bundle:', err.message);
+  console.error("❌ [api/index.js] FATAL: Failed to load Express bundle:", err.message);
   console.error(err.stack);
-  // app remains undefined — handler below will return 500
 }
 
 module.exports = function handler(req, res) {
   if (!app) {
-    console.error('[api/index.js] Handler called but app is not initialized');
+    console.error("[api/index.js] Handler called but app failed to initialize");
     res.statusCode = 500;
-    res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ error: 'Server initialization failed' }));
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ error: "Server initialization failed" }));
     return;
   }
 
   try {
     return app(req, res);
   } catch (err) {
-    console.error('[api/index.js] Handler crash:', err.message);
+    console.error("❌ [api/index.js] Handler crash:", err.message);
     console.error(err.stack);
     if (!res.headersSent) {
       res.statusCode = 500;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ error: 'Internal Server Error' }));
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "Internal Server Error" }));
     }
   }
 };
