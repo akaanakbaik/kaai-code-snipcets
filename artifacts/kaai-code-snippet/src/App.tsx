@@ -15,6 +15,7 @@ import Stats from "@/pages/stats";
 import Terms from "@/pages/terms";
 import Privacy from "@/pages/privacy";
 import RawView from "@/pages/raw";
+import Docs from "@/pages/docs";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -44,6 +45,7 @@ function Router() {
             <Route path="/stats" component={Stats} />
             <Route path="/terms" component={Terms} />
             <Route path="/privacy" component={Privacy} />
+            <Route path="/docs" component={Docs} />
             <Route component={NotFound} />
           </Switch>
         </Layout>

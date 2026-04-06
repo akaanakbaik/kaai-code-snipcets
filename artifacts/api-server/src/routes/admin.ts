@@ -14,6 +14,17 @@ import { eq, and, gt, desc, ilike, or, count, sum, asc } from "drizzle-orm";
 import crypto from "node:crypto";
 import { sendOtpEmail, sendApprovalEmail, sendRejectionEmail, sendBroadcastEmail } from "../lib/mailer";
 import { adminLoginRateLimit, getClientIp } from "../middlewares/security";
+import {
+  listApiKeys,
+  createApiKey,
+  updateApiKey,
+  deleteApiKey,
+  listIpWhitelist,
+  addIpWhitelist,
+  updateIpWhitelist,
+  deleteIpWhitelist,
+  getRequestLogs,
+} from "./api-keys";
 
 const router = Router();
 
@@ -700,6 +711,86 @@ router.delete("/admin/ban-email/:email", async (req: Request, res: Response) => 
       res.json({ success: true });
     } catch {
       res.status(500).json({ error: "SERVER_ERROR", message: "Failed to unban" });
+    }
+  });
+});
+
+// ─── API Key Management ────────────────────────────────────────────────────────
+
+router.get("/admin/api-keys", async (req: Request, res: Response) => {
+  await requireAdminSession(req, res, () => listApiKeys(req, res));
+});
+
+router.post("/admin/api-keys", async (req: Request, res: Response) => {
+  await requireAdminSession(req, res, () => createApiKey(req, res));
+});
+
+router.patch("/admin/api-keys/:id", async (req: Request, res: Response) => {
+  await requireAdminSession(req, res, () => updateApiKey(req, res));
+});
+
+router.delete("/admin/api-keys/:id", async (req: Request, res: Response) => {
+  await requireAdminSession(req, res, () => deleteApiKey(req, res));
+});
+
+// ─── IP Whitelist Management ───────────────────────────────────────────────────
+
+router.get("/admin/ip-whitelist", async (req: Request, res: Response) => {
+  await requireAdminSession(req, res, () => listIpWhitelist(req, res));
+});
+
+router.post("/admin/ip-whitelist", async (req: Request, res: Response) => {
+  await requireAdminSession(req, res, () => addIpWhitelist(req, res));
+});
+
+router.patch("/admin/ip-whitelist/:id", async (req: Request, res: Response) => {
+  await requireAdminSession(req, res, () => updateIpWhitelist(req, res));
+});
+
+router.delete("/admin/ip-whitelist/:id", async (req: Request, res: Response) => {
+  await requireAdminSession(req, res, () => deleteIpWhitelist(req, res));
+});
+
+// ─── Request Logs / Security Dashboard ────────────────────────────────────────
+
+router.get("/admin/request-logs", async (req: Request, res: Response) => {
+  await requireAdminSession(req, res, () => getRequestLogs(req, res));
+});
+
+// ─── Snippet Management (force delete + metadata edit) ────────────────────────
+
+// PUT /api/admin/snippets/:id - Edit snippet metadata
+router.put("/admin/snippets/:id", async (req: Request, res: Response) => {
+  await requireAdminSession(req, res, async () => {
+    const { id } = req.params;
+    const { title, description, language, tags, rejectReason } = req.body;
+    const updates: Record<string, unknown> = { updatedAt: new Date() };
+    if (title !== undefined) updates.title = title.trim();
+    if (description !== undefined) updates.description = description.trim();
+    if (language !== undefined) updates.language = language.trim();
+    if (tags !== undefined) updates.tags = Array.isArray(tags) ? tags : [];
+    if (rejectReason !== undefined) updates.rejectReason = rejectReason || null;
+
+    try {
+      const [updated] = await db
+        .update(snippetsTable)
+        .set(updates as any)
+        .where(eq(snippetsTable.id, id))
+        .returning();
+
+      if (!updated) {
+        res.status(404).json({ error: "NOT_FOUND", message: "Snippet not found" });
+        return;
+      }
+
+      res.json({
+        ...updated,
+        tags: updated.tags ?? [],
+        createdAt: updated.createdAt.toISOString(),
+        updatedAt: updated.updatedAt.toISOString(),
+      });
+    } catch {
+      res.status(500).json({ error: "SERVER_ERROR", message: "Failed to update snippet" });
     }
   });
 });

@@ -5,6 +5,7 @@ import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { globalRateLimit, securityHeaders, safeErrorHandler } from "./middlewares/security";
+import { requestLogger } from "./middlewares/request-logger";
 
 const app: Express = express();
 
@@ -33,13 +34,13 @@ app.use(
 // Security headers
 app.use(securityHeaders);
 
-// CORS - allow credentials from frontend
+// CORS - allow credentials from frontend + X-API-Key for external consumers
 app.use(
   cors({
     origin: true,
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Webhook-Secret"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Webhook-Secret", "X-API-Key"],
   }),
 );
 
@@ -52,6 +53,9 @@ app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
 // Global rate limiting
 app.use(globalRateLimit);
+
+// Request logging for security dashboard
+app.use(requestLogger);
 
 // Routes
 app.use("/api", router);

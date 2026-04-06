@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { BookOpen, Upload, BarChart3, Menu, X, Shield } from "lucide-react";
+import { BookOpen, Upload, BarChart3, Menu, X, Shield, FileText } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 
@@ -80,6 +80,8 @@ function SidebarContent({ onItemClick }: { onItemClick?: () => void }) {
             <Link href="/terms" onClick={onItemClick} className="hover:text-muted-foreground transition-colors">Terms</Link>
             <span>·</span>
             <Link href="/privacy" onClick={onItemClick} className="hover:text-muted-foreground transition-colors">Privacy</Link>
+            <span>·</span>
+            <Link href="/docs" onClick={onItemClick} className="hover:text-muted-foreground transition-colors flex items-center gap-0.5"><FileText className="w-2.5 h-2.5" />Docs</Link>
           </div>
           <p className="text-[11px] text-muted-foreground/50">
             made by{" "}
@@ -181,6 +183,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <Link href="/terms" className="hover:text-muted-foreground transition-colors">Terms</Link>
             <span>·</span>
             <Link href="/privacy" className="hover:text-muted-foreground transition-colors">Privacy</Link>
+            <span>·</span>
+            <Link href="/docs" className="hover:text-muted-foreground transition-colors">Docs</Link>
           </div>
           made by{" "}
           <a href="https://akadev.me" target="_blank" rel="noreferrer" className="inline-flex items-center">

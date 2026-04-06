@@ -1,4 +1,4 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, Request, Response } from "express";
 import healthRouter from "./health";
 import snippetsRouter from "./snippets";
 import statsRouter from "./stats";
