@@ -60,3 +60,29 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# pnpm
+.pnpm-store/
+.pnpm-debug.log*
+
+# npm / yarn (not used in this project)
+package-lock.json
+yarn.lock
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build cache
+.turbo/
+.vercel/
+.next/
+out/
+build/
+
+# Temp & system
+.tmp/
+temp/
+*.tmp
+
+# Attached assets (large binary files)
+attached_assets/
