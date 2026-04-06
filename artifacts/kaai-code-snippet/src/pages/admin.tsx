@@ -189,10 +189,20 @@ function ReviewTab({ auth, setLocation }: { auth: { ok: boolean; email: string }
       if (broadcastMode === "one") body.targetEmail = broadcastTarget;
       const res = await fetch(`${API_BASE}${endpoint}`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const data = await res.json();
-      toast({ title: "Broadcast terkirim ✓", description: broadcastMode === "all" ? `${data.recipientCount} penerima` : `Ke ${broadcastTarget}` });
+      if (!res.ok) {
+        toast({ title: "Gagal kirim email", description: data.message || `Error ${res.status}`, variant: "destructive" });
+        return;
+      }
+      const desc = broadcastMode === "all"
+        ? `${data.sent ?? data.recipientCount} terkirim${data.failed ? `, ${data.failed} gagal` : ""}`
+        : `Terkirim ke ${broadcastTarget}`;
+      toast({ title: "Email berhasil dikirim ✓", description: desc });
       setBroadcastMode(null); setBroadcastSubject(""); setBroadcastMessage(""); setBroadcastInitial(""); setBroadcastTarget("");
-    } catch { toast({ title: "Gagal broadcast", variant: "destructive" }); }
-    finally { setActionLoading(null); }
+    } catch (e: any) {
+      toast({ title: "Gagal kirim email", description: e?.message || "Koneksi error", variant: "destructive" });
+    } finally {
+      setActionLoading(null);
+    }
   };
 
   return (
