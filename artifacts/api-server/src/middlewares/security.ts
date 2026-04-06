@@ -3,6 +3,7 @@ import rateLimit from "express-rate-limit";
 import { db } from "@workspace/db";
 import { ipBansTable, emailBansTable } from "@workspace/db/schema";
 import { eq, gt } from "drizzle-orm";
+import { logger } from "../lib/logger";
 
 // Global rate limiter: max 10 requests per second per IP
 export const globalRateLimit = rateLimit({
@@ -109,15 +110,23 @@ export function safeErrorHandler(
   err: Error,
   req: Request,
   res: Response,
-  next: NextFunction,
+  _next: NextFunction,
 ): void {
   const status = (err as any).status ?? (err as any).statusCode ?? 500;
   const isProd = process.env.NODE_ENV === "production";
+
+  // Always log the real error so it appears in Vercel/server logs
+  logger.error(
+    { err, method: req.method, path: req.path, status },
+    "[error-handler] Unhandled route error"
+  );
+
+  if (res.headersSent) return;
+
   res.status(status).json({
     error: status >= 500 ? "INTERNAL_ERROR" : "REQUEST_ERROR",
     message: isProd && status >= 500 ? "An unexpected error occurred." : err.message,
   });
-  next;
 }
 
 export { getClientIp };
