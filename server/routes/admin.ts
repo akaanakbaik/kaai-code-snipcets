@@ -40,17 +40,16 @@ const MAX_FAILED_ATTEMPTS_BEFORE_BAN = 5;
 const SESSION_COOKIE = "admin_session";
 
 function getSessionCookie(req: Request): string | undefined {
-  // Support signed cookies (when SESSION_SECRET is set) and unsigned fallback
-  return (req.signedCookies?.[SESSION_COOKIE] as string | undefined)
-    ?? (req.cookies?.[SESSION_COOKIE] as string | undefined);
+  // Use plain cookie (HttpOnly + HTTPS = secure enough)
+  return (req.cookies?.[SESSION_COOKIE] as string | undefined) || undefined;
 }
 
 function setSessionCookie(res: Response, sessionId: string, expiresAt: Date): void {
+  // Simple HttpOnly cookie — HTTPS provides transport security, no need for signed cookies
   res.cookie(SESSION_COOKIE, sessionId, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    signed: !!process.env.SESSION_SECRET,
+    secure: true,          // Always secure (site is HTTPS only)
+    sameSite: "lax",       // lax to allow navigation from email links
     expires: expiresAt,
     path: "/",
   });
@@ -220,23 +219,32 @@ async function handleRequestOtp(req: Request, res: Response): Promise<void> {
   const otp = generateOtp();
   const expiresAt = new Date(Date.now() + OTP_DURATION_MS);
 
-  await db.delete(adminOtpsTable).where(eq(adminOtpsTable.email, email)).catch(() => {});
-
-  await db.insert(adminOtpsTable).values({
-    id: crypto.randomUUID(),
-    email,
-    otp,
-    used: false,
-    expiresAt,
-    createdAt: new Date(),
-  });
+  // Delete existing OTP and insert new one inside try-catch
+  try {
+    await db.delete(adminOtpsTable).where(eq(adminOtpsTable.email, email));
+    await db.insert(adminOtpsTable).values({
+      id: crypto.randomUUID(),
+      email,
+      otp,
+      used: false,
+      expiresAt,
+      createdAt: new Date(),
+    });
+    logger.info(`[admin] OTP stored for ${email} — expires ${expiresAt.toISOString()}`);
+  } catch (err) {
+    logger.error(`[admin] Failed to store OTP for ${email}: ${(err as Error).message}`);
+    res.status(500).json({ error: "DB_ERROR", message: "Gagal menyimpan OTP. Coba lagi." });
+    return;
+  }
 
   try {
     await sendOtpEmail(email, otp);
-    logger.info(`[admin] OTP (5-digit) sent to ${email} from IP ${ip}`);
+    logger.info(`[admin] OTP email sent to ${email} from IP ${ip}`);
   } catch (err) {
-    logger.error(`[admin] Failed to send OTP to ${email}: ${(err as Error).message}`);
-    res.status(500).json({ error: "MAIL_ERROR", message: "Gagal mengirim OTP. Coba lagi." });
+    logger.error(`[admin] Failed to send OTP email to ${email}: ${(err as Error).message}`);
+    // OTP is in DB but email failed — clean up
+    await db.delete(adminOtpsTable).where(eq(adminOtpsTable.email, email)).catch(() => {});
+    res.status(500).json({ error: "MAIL_ERROR", message: "Gagal mengirim OTP ke email. Coba lagi." });
     return;
   }
 
@@ -254,6 +262,8 @@ async function handleVerifyOtp(req: Request, res: Response): Promise<void> {
   }
 
   const email = sanitizeEmail(raw);
+  // Normalize OTP: strip whitespace, take only digits
+  const otpClean = String(otpInput).replace(/\D/g, "").trim();
   const ip = getClientIp(req);
 
   const ipBanMsg = await checkIpBan(ip);
@@ -265,28 +275,47 @@ async function handleVerifyOtp(req: Request, res: Response): Promise<void> {
   }
 
   try {
-    const [record] = await db
+    // Step 1: Find latest OTP for this email (diagnose exactly why it fails)
+    const [latestOtp] = await db
       .select()
       .from(adminOtpsTable)
-      .where(
-        and(
-          eq(adminOtpsTable.email, email),
-          eq(adminOtpsTable.otp, String(otpInput).trim()),
-          eq(adminOtpsTable.used, false),
-          gt(adminOtpsTable.expiresAt, new Date()),
-        ),
-      )
+      .where(eq(adminOtpsTable.email, email))
+      .orderBy(desc(adminOtpsTable.createdAt))
       .limit(1);
 
-    if (!record) {
+    if (!latestOtp) {
+      logger.warn(`[admin] Verify: no OTP found in DB for ${email}`);
       await recordFailedAttempt(ip, email);
-      res.status(401).json({ error: "INVALID_OTP", message: "OTP salah atau sudah kadaluarsa." });
+      res.status(401).json({ error: "INVALID_OTP", message: "OTP tidak ditemukan. Minta OTP baru." });
       return;
     }
 
-    await db.update(adminOtpsTable).set({ used: true }).where(eq(adminOtpsTable.id, record.id));
+    // Step 2: Check each condition and give precise error
+    const now = new Date();
+    if (latestOtp.used) {
+      logger.warn(`[admin] Verify: OTP already used for ${email}`);
+      await recordFailedAttempt(ip, email);
+      res.status(401).json({ error: "OTP_USED", message: "OTP sudah digunakan. Minta OTP baru." });
+      return;
+    }
+    if (latestOtp.expiresAt <= now) {
+      logger.warn(`[admin] Verify: OTP expired for ${email} (expired ${latestOtp.expiresAt.toISOString()})`);
+      await recordFailedAttempt(ip, email);
+      res.status(401).json({ error: "OTP_EXPIRED", message: "OTP sudah kadaluarsa. Minta OTP baru." });
+      return;
+    }
+    if (latestOtp.otp !== otpClean) {
+      logger.warn(`[admin] Verify: OTP mismatch for ${email} (input length: ${otpClean.length})`);
+      await recordFailedAttempt(ip, email);
+      res.status(401).json({ error: "INVALID_OTP", message: "Kode OTP salah." });
+      return;
+    }
+
+    // OTP is valid — mark as used
+    await db.update(adminOtpsTable).set({ used: true }).where(eq(adminOtpsTable.id, latestOtp.id));
     await resetFailedAttempts(ip, email);
 
+    // Create session
     const sessionId = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + SESSION_DURATION_MS);
 
@@ -298,11 +327,12 @@ async function handleVerifyOtp(req: Request, res: Response): Promise<void> {
     });
 
     setSessionCookie(res, sessionId, expiresAt);
-    logger.info(`[admin] Login successful: ${email} from IP ${ip}`);
+    logger.info(`[admin] ✅ Login sukses: ${email} from IP ${ip} — session ${sessionId.slice(0, 8)}...`);
     res.json({ success: true, email });
   } catch (err) {
-    logger.error(`[admin] OTP verify failed: ${(err as Error).message}`);
-    res.status(500).json({ error: "SERVER_ERROR", message: "Gagal verifikasi OTP" });
+    const errMsg = (err as Error).message;
+    logger.error(`[admin] OTP verify error for ${email}: ${errMsg}`);
+    res.status(500).json({ error: "SERVER_ERROR", message: `Gagal verifikasi: ${errMsg.slice(0, 100)}` });
   }
 }
 
