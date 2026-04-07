@@ -955,14 +955,15 @@ var IP_BAN_DURATION_MS = 24 * 60 * 60 * 1e3;
 var MAX_FAILED_ATTEMPTS_BEFORE_BAN = 5;
 var SESSION_COOKIE = "admin_session";
 function getSessionCookie(req) {
-  return req.signedCookies?.[SESSION_COOKIE] ?? req.cookies?.[SESSION_COOKIE];
+  return req.cookies?.[SESSION_COOKIE] || void 0;
 }
 function setSessionCookie(res, sessionId, expiresAt) {
   res.cookie(SESSION_COOKIE, sessionId, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    signed: !!process.env.SESSION_SECRET,
+    secure: true,
+    // Always secure (site is HTTPS only)
+    sameSite: "lax",
+    // lax to allow navigation from email links
     expires: expiresAt,
     path: "/"
   });
@@ -1081,22 +1082,30 @@ async function handleRequestOtp(req, res) {
   }
   const otp = generateOtp();
   const expiresAt = new Date(Date.now() + OTP_DURATION_MS);
-  await db.delete(adminOtpsTable).where((0, import_drizzle_orm5.eq)(adminOtpsTable.email, email)).catch(() => {
-  });
-  await db.insert(adminOtpsTable).values({
-    id: import_node_crypto2.default.randomUUID(),
-    email,
-    otp,
-    used: false,
-    expiresAt,
-    createdAt: /* @__PURE__ */ new Date()
-  });
+  try {
+    await db.delete(adminOtpsTable).where((0, import_drizzle_orm5.eq)(adminOtpsTable.email, email));
+    await db.insert(adminOtpsTable).values({
+      id: import_node_crypto2.default.randomUUID(),
+      email,
+      otp,
+      used: false,
+      expiresAt,
+      createdAt: /* @__PURE__ */ new Date()
+    });
+    logger.info(`[admin] OTP stored for ${email} \u2014 expires ${expiresAt.toISOString()}`);
+  } catch (err) {
+    logger.error(`[admin] Failed to store OTP for ${email}: ${err.message}`);
+    res.status(500).json({ error: "DB_ERROR", message: "Gagal menyimpan OTP. Coba lagi." });
+    return;
+  }
   try {
     await sendOtpEmail(email, otp);
-    logger.info(`[admin] OTP (5-digit) sent to ${email} from IP ${ip}`);
+    logger.info(`[admin] OTP email sent to ${email} from IP ${ip}`);
   } catch (err) {
-    logger.error(`[admin] Failed to send OTP to ${email}: ${err.message}`);
-    res.status(500).json({ error: "MAIL_ERROR", message: "Gagal mengirim OTP. Coba lagi." });
+    logger.error(`[admin] Failed to send OTP email to ${email}: ${err.message}`);
+    await db.delete(adminOtpsTable).where((0, import_drizzle_orm5.eq)(adminOtpsTable.email, email)).catch(() => {
+    });
+    res.status(500).json({ error: "MAIL_ERROR", message: "Gagal mengirim OTP ke email. Coba lagi." });
     return;
   }
   res.json({ success: true, message: "OTP dikirim ke email kamu." });
@@ -1109,6 +1118,7 @@ async function handleVerifyOtp(req, res) {
     return;
   }
   const email = sanitizeEmail(raw);
+  const otpClean = String(otpInput).replace(/\D/g, "").trim();
   const ip = getClientIp(req);
   const ipBanMsg = await checkIpBan(ip);
   if (ipBanMsg) {
@@ -1120,20 +1130,33 @@ async function handleVerifyOtp(req, res) {
     return;
   }
   try {
-    const [record] = await db.select().from(adminOtpsTable).where(
-      (0, import_drizzle_orm5.and)(
-        (0, import_drizzle_orm5.eq)(adminOtpsTable.email, email),
-        (0, import_drizzle_orm5.eq)(adminOtpsTable.otp, String(otpInput).trim()),
-        (0, import_drizzle_orm5.eq)(adminOtpsTable.used, false),
-        (0, import_drizzle_orm5.gt)(adminOtpsTable.expiresAt, /* @__PURE__ */ new Date())
-      )
-    ).limit(1);
-    if (!record) {
+    const [latestOtp] = await db.select().from(adminOtpsTable).where((0, import_drizzle_orm5.eq)(adminOtpsTable.email, email)).orderBy((0, import_drizzle_orm5.desc)(adminOtpsTable.createdAt)).limit(1);
+    if (!latestOtp) {
+      logger.warn(`[admin] Verify: no OTP found in DB for ${email}`);
       await recordFailedAttempt(ip, email);
-      res.status(401).json({ error: "INVALID_OTP", message: "OTP salah atau sudah kadaluarsa." });
+      res.status(401).json({ error: "INVALID_OTP", message: "OTP tidak ditemukan. Minta OTP baru." });
       return;
     }
-    await db.update(adminOtpsTable).set({ used: true }).where((0, import_drizzle_orm5.eq)(adminOtpsTable.id, record.id));
+    const now = /* @__PURE__ */ new Date();
+    if (latestOtp.used) {
+      logger.warn(`[admin] Verify: OTP already used for ${email}`);
+      await recordFailedAttempt(ip, email);
+      res.status(401).json({ error: "OTP_USED", message: "OTP sudah digunakan. Minta OTP baru." });
+      return;
+    }
+    if (latestOtp.expiresAt <= now) {
+      logger.warn(`[admin] Verify: OTP expired for ${email} (expired ${latestOtp.expiresAt.toISOString()})`);
+      await recordFailedAttempt(ip, email);
+      res.status(401).json({ error: "OTP_EXPIRED", message: "OTP sudah kadaluarsa. Minta OTP baru." });
+      return;
+    }
+    if (latestOtp.otp !== otpClean) {
+      logger.warn(`[admin] Verify: OTP mismatch for ${email} (input length: ${otpClean.length})`);
+      await recordFailedAttempt(ip, email);
+      res.status(401).json({ error: "INVALID_OTP", message: "Kode OTP salah." });
+      return;
+    }
+    await db.update(adminOtpsTable).set({ used: true }).where((0, import_drizzle_orm5.eq)(adminOtpsTable.id, latestOtp.id));
     await resetFailedAttempts(ip, email);
     const sessionId = import_node_crypto2.default.randomUUID();
     const expiresAt = new Date(Date.now() + SESSION_DURATION_MS);
@@ -1144,11 +1167,12 @@ async function handleVerifyOtp(req, res) {
       createdAt: /* @__PURE__ */ new Date()
     });
     setSessionCookie(res, sessionId, expiresAt);
-    logger.info(`[admin] Login successful: ${email} from IP ${ip}`);
+    logger.info(`[admin] \u2705 Login sukses: ${email} from IP ${ip} \u2014 session ${sessionId.slice(0, 8)}...`);
     res.json({ success: true, email });
   } catch (err) {
-    logger.error(`[admin] OTP verify failed: ${err.message}`);
-    res.status(500).json({ error: "SERVER_ERROR", message: "Gagal verifikasi OTP" });
+    const errMsg = err.message;
+    logger.error(`[admin] OTP verify error for ${email}: ${errMsg}`);
+    res.status(500).json({ error: "SERVER_ERROR", message: `Gagal verifikasi: ${errMsg.slice(0, 100)}` });
   }
 }
 router4.post("/admin/login", adminLoginRateLimit, handleRequestOtp);
