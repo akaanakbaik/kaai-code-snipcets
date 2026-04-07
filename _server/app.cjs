@@ -194,36 +194,45 @@ var apiKeyUsageTable = (0, import_pg_core.pgTable)("api_key_usage", {
 
 // server/lib/db.ts
 var { Pool } = import_pg.default;
-var dbUrl = process.env.DATABASE_URL;
+function sslFor(url) {
+  if (!url) return void 0;
+  if (url.includes("supabase.co") || url.includes("supabase.com") || url.includes("neon.tech")) {
+    return { rejectUnauthorized: false };
+  }
+  return void 0;
+}
+var dbUrl = process.env.DATABASE_SUPABASE_POLLER_URL_2 ?? process.env.DATABASE_URL ?? void 0;
 if (!dbUrl) {
   console.error(
-    "[db] WARNING: DATABASE_URL is not set. All database operations will fail. Set DATABASE_URL in your environment (Vercel dashboard or .env)."
+    "[db] CRITICAL: No primary database URL found. Set DATABASE_SUPABASE_POLLER_URL_2 (production) or DATABASE_URL (dev)."
   );
 }
 var pool = new Pool({
   connectionString: dbUrl ?? "postgres://placeholder:placeholder@localhost:5432/placeholder",
   connectionTimeoutMillis: 1e4,
   idleTimeoutMillis: 3e4,
-  max: 3,
-  ssl: dbUrl?.includes("supabase.co") || dbUrl?.includes("neon.tech") ? { rejectUnauthorized: false } : void 0
+  // Keep small pool size for serverless — each function instance creates its own pool.
+  // Supabase Transaction pooler supports unlimited clients but limits concurrent txns.
+  max: 2,
+  ssl: sslFor(dbUrl)
 });
 var db = (0, import_node_postgres.drizzle)(pool, { schema: schema_exports });
-var dbUrl1 = process.env.DATABASE_URL_SUPABASE_1;
+var dbUrl1 = process.env.DATABASE_SUPABASE_POLLER_URL_1 ?? process.env.DATABASE_URL_SUPABASE_1 ?? void 0;
 var poolSupabase1 = dbUrl1 ? new Pool({
   connectionString: dbUrl1,
   connectionTimeoutMillis: 8e3,
   idleTimeoutMillis: 2e4,
-  max: 2,
-  ssl: { rejectUnauthorized: false }
+  max: 1,
+  ssl: sslFor(dbUrl1)
 }) : null;
 var dbSupabase1 = poolSupabase1 ? (0, import_node_postgres.drizzle)(poolSupabase1, { schema: schema_exports }) : null;
-var dbUrl2 = process.env.DATABASE_URL_SUPABASE_2;
+var dbUrl2 = process.env.DATABASE_SUPABASE_POLLER_URL_2 ?? process.env.DATABASE_URL_SUPABASE_2 ?? void 0;
 var poolSupabase2 = dbUrl2 ? new Pool({
   connectionString: dbUrl2,
   connectionTimeoutMillis: 8e3,
   idleTimeoutMillis: 2e4,
-  max: 2,
-  ssl: { rejectUnauthorized: false }
+  max: 1,
+  ssl: sslFor(dbUrl2)
 }) : null;
 var dbSupabase2 = poolSupabase2 ? (0, import_node_postgres.drizzle)(poolSupabase2, { schema: schema_exports }) : null;
 
@@ -231,11 +240,16 @@ var dbSupabase2 = poolSupabase2 ? (0, import_node_postgres.drizzle)(poolSupabase
 var import_zod = require("zod");
 var router = (0, import_express.Router)();
 var HealthCheckResponse = import_zod.z.object({ status: import_zod.z.literal("ok") });
+function maskUrl(url) {
+  if (!url) return "(not set)";
+  return url.replace(/\/\/[^@]+@/, "//***@").slice(0, 80);
+}
 router.get("/healthz", (_req, res) => {
   res.json(HealthCheckResponse.parse({ status: "ok" }));
 });
 router.get("/healthz/db", async (_req, res) => {
   const start = Date.now();
+  const primaryUrl = process.env.DATABASE_SUPABASE_POLLER_URL_2 ?? process.env.DATABASE_URL ?? void 0;
   try {
     const client = await pool.connect();
     const result = await client.query(`
@@ -250,15 +264,48 @@ router.get("/healthz/db", async (_req, res) => {
       latencyMs: Date.now() - start,
       tables: result.rows.map((r) => r.table_name),
       nodeEnv: process.env.NODE_ENV,
-      dbHost: process.env.DATABASE_URL?.replace(/\/\/[^@]+@/, "//***@").slice(0, 60)
+      primaryDb: maskUrl(primaryUrl),
+      supabase1Connected: poolSupabase1 !== null,
+      supabase2Connected: poolSupabase2 !== null
     });
   } catch (err) {
     res.status(500).json({
       status: "error",
       latencyMs: Date.now() - start,
       error: err.message,
-      nodeEnv: process.env.NODE_ENV
+      nodeEnv: process.env.NODE_ENV,
+      primaryDb: maskUrl(primaryUrl),
+      supabase1Connected: poolSupabase1 !== null,
+      supabase2Connected: poolSupabase2 !== null
     });
+  }
+});
+router.get("/healthz/db/supabase1", async (_req, res) => {
+  if (!poolSupabase1) {
+    return res.status(503).json({ status: "disabled", reason: "DATABASE_SUPABASE_POLLER_URL_1 and DATABASE_URL_SUPABASE_1 not set" });
+  }
+  const start = Date.now();
+  try {
+    const client = await poolSupabase1.connect();
+    await client.query("SELECT 1");
+    client.release();
+    res.json({ status: "ok", latencyMs: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ status: "error", latencyMs: Date.now() - start, error: err.message });
+  }
+});
+router.get("/healthz/db/supabase2", async (_req, res) => {
+  if (!poolSupabase2) {
+    return res.status(503).json({ status: "disabled", reason: "DATABASE_SUPABASE_POLLER_URL_2 and DATABASE_URL_SUPABASE_2 not set" });
+  }
+  const start = Date.now();
+  try {
+    const client = await poolSupabase2.connect();
+    await client.query("SELECT 1");
+    client.release();
+    res.json({ status: "ok", latencyMs: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ status: "error", latencyMs: Date.now() - start, error: err.message });
   }
 });
 var health_default = router;
