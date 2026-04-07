@@ -9,7 +9,7 @@ export const LANGUAGE_CONFIG: Record<string, { label: string, color: string }> =
   cpp: { label: "C++", color: "bg-indigo-400/20 text-indigo-400 border-indigo-400/30" },
   php: { label: "PHP", color: "bg-indigo-500/20 text-indigo-500 border-indigo-500/30" },
   ruby: { label: "Ruby", color: "bg-rose-400/20 text-rose-400 border-rose-400/30" },
-  swift: { label: "Ruby", color: "bg-red-500/20 text-red-500 border-red-500/30" },
+  swift: { label: "Swift", color: "bg-red-500/20 text-red-500 border-red-500/30" },
   kotlin: { label: "Kotlin", color: "bg-violet-400/20 text-violet-400 border-violet-400/30" },
   html: { label: "HTML", color: "bg-orange-500/20 text-orange-500 border-orange-500/30" },
   css: { label: "CSS", color: "bg-blue-500/20 text-blue-500 border-blue-500/30" },

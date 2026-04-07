@@ -8,7 +8,9 @@ import {
   BellRing, BellOff, LogOut, Send, RefreshCw, Volume2, VolumeX,
   Key, Wifi, Activity, Plus, Pencil, ToggleLeft, ToggleRight,
   Copy, CheckCircle2, AlertTriangle, FileText, ChevronDown,
+  BarChart3, ShieldOff, Bell, TrendingUp,
 } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -49,7 +51,7 @@ type RequestLog = {
   blockReason: string | null; responseTimeMs: number | null; userAgent: string | null; createdAt: string;
 };
 
-type Tab = "review" | "api-keys" | "ip-whitelist" | "snippets" | "security";
+type Tab = "review" | "api-keys" | "ip-whitelist" | "snippets" | "security" | "analytics" | "broadcast-logs" | "ban-manager";
 type BroadcastMode = "all" | "one" | null;
 
 function useAdminAuth() {
@@ -874,6 +876,256 @@ function SnippetControlTab() {
   );
 }
 
+// ─── Tab: Analytics ──────────────────────────────────────────────────────────
+
+function AnalyticsTab() {
+  const [data, setData] = useState<{ totals: any; submissionsPerDay: { date: string; count: number }[] } | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/analytics`, { credentials: "include" });
+      const json = await res.json();
+      setData(json);
+    } catch {} finally { setLoading(false); }
+  };
+
+  useEffect(() => { fetchData(); }, []);
+
+  const chartData = data?.submissionsPerDay.map((d) => ({
+    date: d.date.slice(5), // MM-DD
+    count: d.count,
+  })) ?? [];
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <div><h2 className="text-base font-semibold">Analytics</h2><p className="text-xs text-muted-foreground">Statistik snippet platform</p></div>
+        <Button size="sm" variant="outline" className="text-xs h-7" onClick={fetchData}><RefreshCw className="w-3 h-3 mr-1" /> Refresh</Button>
+      </div>
+
+      {loading ? (
+        <div className="space-y-3">{[1,2,3].map(i => <Skeleton key={i} className="h-20 rounded-xl" />)}</div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: "Total Snippet", value: data?.totals.total ?? 0, color: "text-blue-400", bg: "bg-blue-500/10 border-blue-500/20" },
+              { label: "Pending", value: data?.totals.pending ?? 0, color: "text-amber-400", bg: "bg-amber-500/10 border-amber-500/20" },
+              { label: "Disetujui", value: data?.totals.approved ?? 0, color: "text-green-400", bg: "bg-green-500/10 border-green-500/20" },
+              { label: "Ditolak", value: data?.totals.rejected ?? 0, color: "text-red-400", bg: "bg-red-500/10 border-red-500/20" },
+            ].map(({ label, value, color, bg }) => (
+              <div key={label} className={cn("glass-card rounded-xl p-4 text-center border", bg)}>
+                <p className={cn("text-2xl font-bold font-heading", color)}>{value}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="glass-card rounded-xl p-5">
+            <h3 className="text-sm font-medium mb-4 flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-blue-400" /> Pengiriman 14 Hari Terakhir
+            </h3>
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={chartData} margin={{ top: 4, right: 4, left: -28, bottom: 0 }}>
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#555" }} tickLine={false} axisLine={false} interval={1} />
+                <YAxis tick={{ fontSize: 10, fill: "#555" }} tickLine={false} axisLine={false} allowDecimals={false} />
+                <Tooltip
+                  contentStyle={{ background: "#0f0f0f", border: "1px solid #222", borderRadius: "8px", fontSize: "12px" }}
+                  labelStyle={{ color: "#888" }}
+                  itemStyle={{ color: "#4a9eff" }}
+                  formatter={(v: any) => [v, "Kiriman"]}
+                />
+                <Bar dataKey="count" radius={[3, 3, 0, 0]}>
+                  {chartData.map((entry, idx) => (
+                    <Cell key={idx} fill={entry.count > 0 ? "#3b82f6" : "#1e293b"} fillOpacity={entry.count > 0 ? 0.8 : 0.3} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Tab: Broadcast Logs ──────────────────────────────────────────────────────
+
+type BroadcastLog = {
+  id: string; adminEmail: string; adminInitial: string | null;
+  targetEmail: string | null; subject: string; message: string;
+  recipientCount: number; createdAt: string;
+};
+
+function BroadcastLogsTab() {
+  const [logs, setLogs] = useState<BroadcastLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<BroadcastLog | null>(null);
+
+  const fetchLogs = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/broadcast-logs?limit=100`, { credentials: "include" });
+      const json = await res.json();
+      setLogs(json.data || []);
+    } catch {} finally { setLoading(false); }
+  };
+
+  useEffect(() => { fetchLogs(); }, []);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div><h2 className="text-base font-semibold">Broadcast Logs</h2><p className="text-xs text-muted-foreground">{logs.length} pesan terkirim</p></div>
+        <Button size="sm" variant="outline" className="text-xs h-7" onClick={fetchLogs}><RefreshCw className="w-3 h-3 mr-1" /> Refresh</Button>
+      </div>
+
+      {loading ? (
+        <div className="space-y-2">{[1,2,3,4].map(i => <Skeleton key={i} className="h-14 rounded-xl" />)}</div>
+      ) : logs.length === 0 ? (
+        <div className="text-center py-12 text-muted-foreground text-sm">Belum ada broadcast.</div>
+      ) : (
+        <div className="space-y-2">
+          {logs.map((log) => (
+            <button
+              key={log.id}
+              onClick={() => setSelected(selected?.id === log.id ? null : log)}
+              className={cn("w-full text-left glass-card rounded-xl p-3 space-y-1 transition-all border hover:border-border", selected?.id === log.id ? "border-blue-500/30 bg-blue-500/5" : "border-transparent")}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-foreground truncate">{log.subject}</span>
+                <span className="text-[10px] text-muted-foreground flex-shrink-0">{format(new Date(log.createdAt), "d MMM HH:mm")}</span>
+              </div>
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <span className="font-mono">{log.adminInitial ?? log.adminEmail[0]}...</span>
+                <span>{log.targetEmail ? `→ ${log.targetEmail}` : `→ ${log.recipientCount} penerima`}</span>
+              </div>
+              {selected?.id === log.id && (
+                <div className="mt-2 pt-2 border-t border-border/40 text-xs text-muted-foreground whitespace-pre-line leading-relaxed">{log.message}</div>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Tab: Ban Manager ─────────────────────────────────────────────────────────
+
+type IpBan = { id: string; ipAddress: string; bannedUntil: string; reason: string | null; createdAt: string };
+type EmailBan = { id: string; email: string; bannedUntil: string; reason: string | null; createdAt: string };
+
+function BanManagerTab() {
+  const { toast } = useToast();
+  const [ipBans, setIpBans] = useState<IpBan[]>([]);
+  const [emailBans, setEmailBans] = useState<EmailBan[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [banTab, setBanTab] = useState<"ip" | "email">("ip");
+
+  const fetchBans = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/security/bans`, { credentials: "include" });
+      const json = await res.json();
+      setIpBans(json.ipBans || []);
+      setEmailBans(json.emailBans || []);
+    } catch {} finally { setLoading(false); }
+  };
+
+  useEffect(() => { fetchBans(); }, []);
+
+  const removeIpBan = async (id: string) => {
+    await fetch(`${API_BASE}/api/admin/security/bans/ip/${id}`, { method: "DELETE", credentials: "include" });
+    toast({ title: "IP ban dihapus ✓" });
+    fetchBans();
+  };
+
+  const removeEmailBan = async (id: string) => {
+    await fetch(`${API_BASE}/api/admin/security/bans/email/${id}`, { method: "DELETE", credentials: "include" });
+    toast({ title: "Email ban dihapus ✓" });
+    fetchBans();
+  };
+
+  const now = new Date();
+  const activeIpBans = ipBans.filter((b) => new Date(b.bannedUntil) > now);
+  const activeEmailBans = emailBans.filter((b) => new Date(b.bannedUntil) > now);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-semibold">Ban Manager</h2>
+          <p className="text-xs text-muted-foreground">{activeIpBans.length} IP aktif · {activeEmailBans.length} email aktif</p>
+        </div>
+        <Button size="sm" variant="outline" className="text-xs h-7" onClick={fetchBans}><RefreshCw className="w-3 h-3 mr-1" /> Refresh</Button>
+      </div>
+
+      <div className="flex gap-1">
+        {(["ip", "email"] as const).map((t) => (
+          <button key={t} onClick={() => setBanTab(t)} className={cn("px-3 py-1 rounded-lg text-xs border", banTab === t ? "bg-red-600/20 text-red-400 border-red-500/30" : "bg-background/50 text-muted-foreground border-border/50")}>
+            {t === "ip" ? `IP Bans (${activeIpBans.length})` : `Email Bans (${activeEmailBans.length})`}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-12 rounded-xl" />)}</div>
+      ) : banTab === "ip" ? (
+        activeIpBans.length === 0 ? (
+          <div className="text-center py-10 text-muted-foreground text-sm">Tidak ada IP yang diblokir aktif.</div>
+        ) : (
+          <div className="space-y-2">
+            {activeIpBans.map((ban) => {
+              const mins = Math.ceil((new Date(ban.bannedUntil).getTime() - Date.now()) / 60000);
+              return (
+                <div key={ban.id} className="glass-card rounded-xl p-3 flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <code className="font-mono text-sm text-red-300">{ban.ipAddress}</code>
+                      <Badge variant="outline" className="text-[10px] text-amber-400 border-amber-500/30">{mins > 60 ? `${Math.ceil(mins/60)}j` : `${mins}m`} lagi</Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">{ban.reason ?? "—"}</p>
+                  </div>
+                  <Button size="sm" variant="ghost" className="h-7 px-2 text-red-400" onClick={() => removeIpBan(ban.id)}>
+                    <X className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        )
+      ) : (
+        activeEmailBans.length === 0 ? (
+          <div className="text-center py-10 text-muted-foreground text-sm">Tidak ada email yang diblokir aktif.</div>
+        ) : (
+          <div className="space-y-2">
+            {activeEmailBans.map((ban) => {
+              const mins = Math.ceil((new Date(ban.bannedUntil).getTime() - Date.now()) / 60000);
+              return (
+                <div key={ban.id} className="glass-card rounded-xl p-3 flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm text-red-300">{ban.email}</span>
+                      <Badge variant="outline" className="text-[10px] text-amber-400 border-amber-500/30">{mins > 60 ? `${Math.ceil(mins/60)}j` : `${mins}m`} lagi</Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">{ban.reason ?? "—"}</p>
+                  </div>
+                  <Button size="sm" variant="ghost" className="h-7 px-2 text-red-400" onClick={() => removeEmailBan(ban.id)}>
+                    <X className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
 // ─── Tab: Security Dashboard ──────────────────────────────────────────────────
 
 function SecurityDashboard() {
@@ -957,16 +1209,61 @@ function SecurityDashboard() {
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: "review", label: "Review", icon: Shield },
+  { id: "analytics", label: "Analytics", icon: BarChart3 },
   { id: "api-keys", label: "API Keys", icon: Key },
   { id: "ip-whitelist", label: "IP Whitelist", icon: Wifi },
   { id: "snippets", label: "Snippets", icon: FileText },
   { id: "security", label: "Security", icon: Activity },
+  { id: "broadcast-logs", label: "Broadcast", icon: Megaphone },
+  { id: "ban-manager", label: "Ban Manager", icon: ShieldOff },
 ];
 
 export default function Admin() {
   const auth = useAdminAuth();
   const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState<Tab>("review");
+  const [notifPerm, setNotifPerm] = useState<NotificationPermission | "unsupported">("default");
+  const pendingCountRef = useRef<number>(-1);
+
+  useEffect(() => {
+    if ("Notification" in window) {
+      setNotifPerm(Notification.permission);
+    } else {
+      setNotifPerm("unsupported");
+    }
+  }, []);
+
+  const requestNotifPermission = async () => {
+    if (!("Notification" in window)) return;
+    const perm = await Notification.requestPermission();
+    setNotifPerm(perm);
+    if (perm === "granted") {
+      new Notification("Kaai Admin", { body: "Notifikasi snippet baru diaktifkan!", icon: "/favicon.ico" });
+    }
+  };
+
+  // Poll for new pending snippets every 60s
+  useEffect(() => {
+    if (notifPerm !== "granted") return;
+    const check = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/admin/pending`, { credentials: "include" });
+        const json = await res.json();
+        const currentCount = (json.data || []).length;
+        if (pendingCountRef.current >= 0 && currentCount > pendingCountRef.current) {
+          const diff = currentCount - pendingCountRef.current;
+          new Notification("Kaai Code Snippet", {
+            body: `Ada ${diff} snippet baru menunggu review! Acc segera ya.`,
+            icon: "/favicon.ico",
+          });
+        }
+        pendingCountRef.current = currentCount;
+      } catch { /* ignore */ }
+    };
+    check();
+    const interval = setInterval(check, 60_000);
+    return () => clearInterval(interval);
+  }, [notifPerm]);
 
   const handleLogout = async () => {
     await fetch(`${API_BASE}/api/admin/logout`, { method: "POST", credentials: "include" });
@@ -993,9 +1290,24 @@ export default function Admin() {
           </div>
           <p className="text-xs text-muted-foreground">Login sebagai <span className="text-blue-400">{auth.email}</span></p>
         </div>
-        <Button variant="ghost" size="sm" onClick={handleLogout} className="text-xs h-7 px-2.5 text-muted-foreground">
-          <LogOut className="w-3 h-3 mr-1" /> Keluar
-        </Button>
+        <div className="flex items-center gap-2">
+          {notifPerm === "unsupported" ? null : notifPerm === "granted" ? (
+            <div className="flex items-center gap-1.5 text-xs text-green-400 bg-green-500/10 border border-green-500/20 px-2.5 py-1 rounded-lg">
+              <Bell className="w-3 h-3" /> Notif aktif
+            </div>
+          ) : notifPerm === "denied" ? (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-background/50 border border-border/50 px-2.5 py-1 rounded-lg" title="Izin notifikasi ditolak. Aktifkan di pengaturan browser.">
+              <BellOff className="w-3 h-3" /> Notif diblokir
+            </div>
+          ) : (
+            <Button size="sm" variant="outline" className="text-xs h-7 px-2.5 gap-1.5 border-amber-500/30 text-amber-400 hover:bg-amber-500/10" onClick={requestNotifPermission}>
+              <BellRing className="w-3 h-3" /> Aktifkan Notif
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={handleLogout} className="text-xs h-7 px-2.5 text-muted-foreground">
+            <LogOut className="w-3 h-3 mr-1" /> Keluar
+          </Button>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -1021,10 +1333,13 @@ export default function Admin() {
       <AnimatePresence mode="wait">
         <motion.div key={activeTab} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.15 }}>
           {activeTab === "review" && <ReviewTab auth={auth} setLocation={setLocation} />}
+          {activeTab === "analytics" && <AnalyticsTab />}
           {activeTab === "api-keys" && <ApiKeysTab />}
           {activeTab === "ip-whitelist" && <IpWhitelistTab />}
           {activeTab === "snippets" && <SnippetControlTab />}
           {activeTab === "security" && <SecurityDashboard />}
+          {activeTab === "broadcast-logs" && <BroadcastLogsTab />}
+          {activeTab === "ban-manager" && <BanManagerTab />}
         </motion.div>
       </AnimatePresence>
     </div>

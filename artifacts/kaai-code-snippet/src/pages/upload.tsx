@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { motion } from "framer-motion";
-import { Upload as UploadIcon, CheckCircle2, Code2, AlertCircle, Send } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Upload as UploadIcon, CheckCircle2, Code2, AlertCircle, Send, ChevronDown, Search, X } from "lucide-react";
 
 import { useCreateSnippet, getListSnippetsQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -21,14 +21,8 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { LANGUAGE_CONFIG } from "@/lib/constants";
+import { cn } from "@/lib/utils";
 
 const formSchema = z.object({
   title: z.string().min(1, "Judul wajib diisi").max(200, "Judul terlalu panjang"),
@@ -39,6 +33,117 @@ const formSchema = z.object({
   authorName: z.string().min(1, "Nama author wajib diisi"),
   authorEmail: z.string().email("Format email tidak valid"),
 });
+
+function LanguagePicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (lang: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  const langs = Object.entries(LANGUAGE_CONFIG);
+  const filtered = query
+    ? langs.filter(([key, cfg]) =>
+        cfg.label.toLowerCase().includes(query.toLowerCase()) ||
+        key.toLowerCase().includes(query.toLowerCase())
+      )
+    : langs;
+
+  const selected = LANGUAGE_CONFIG[value];
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        data-testid="select-language"
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          "w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg border text-sm transition-all",
+          "bg-background/50 border-border/60 hover:border-border focus:outline-none focus:ring-1 focus:ring-primary/50",
+          open && "border-primary/50 ring-1 ring-primary/30",
+        )}
+      >
+        <span className="flex items-center gap-2 min-w-0">
+          {selected ? (
+            <>
+              <span className={cn("w-2 h-2 rounded-full flex-shrink-0", selected.color.split(" ")[0])} />
+              <span className="text-foreground">{selected.label}</span>
+            </>
+          ) : (
+            <span className="text-muted-foreground">Pilih bahasa...</span>
+          )}
+        </span>
+        <ChevronDown className={cn("w-3.5 h-3.5 text-muted-foreground flex-shrink-0 transition-transform", open && "rotate-180")} />
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -6, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -6, scale: 0.98 }}
+            transition={{ duration: 0.13 }}
+            className="absolute top-full mt-1.5 left-0 right-0 z-50 bg-card border border-border/60 rounded-xl shadow-2xl overflow-hidden"
+          >
+            <div className="p-2 border-b border-border/40">
+              <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-background/60">
+                <Search className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                <input
+                  autoFocus
+                  placeholder="Cari bahasa..."
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  className="flex-1 text-sm bg-transparent outline-none placeholder:text-muted-foreground text-foreground"
+                />
+                {query && (
+                  <button onClick={() => setQuery("")} className="text-muted-foreground hover:text-foreground">
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="max-h-48 overflow-y-auto py-1">
+              {filtered.length === 0 ? (
+                <div className="px-4 py-3 text-xs text-muted-foreground text-center">Tidak ditemukan</div>
+              ) : (
+                filtered.map(([key, cfg]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => { onChange(key); setOpen(false); setQuery(""); }}
+                    className={cn(
+                      "w-full px-4 py-2 text-left text-sm flex items-center gap-2.5 transition-colors hover:bg-white/5",
+                      value === key && "text-blue-400 bg-blue-500/8",
+                    )}
+                  >
+                    <span className={cn("w-2 h-2 rounded-full flex-shrink-0", cfg.color.split(" ")[0])} />
+                    {cfg.label}
+                    {value === key && <span className="ml-auto text-[10px] text-blue-400 opacity-70">✓</span>}
+                  </button>
+                ))
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 export default function Upload() {
   const [, setLocation] = useLocation();
@@ -205,18 +310,9 @@ export default function Upload() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>Bahasa</FormLabel>
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
-                          <FormControl>
-                            <SelectTrigger className="bg-background/50" data-testid="select-language">
-                              <SelectValue placeholder="Pilih bahasa" />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            {Object.entries(LANGUAGE_CONFIG).map(([val, config]) => (
-                              <SelectItem key={val} value={val}>{config.label}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        <FormControl>
+                          <LanguagePicker value={field.value} onChange={field.onChange} />
+                        </FormControl>
                         <FormMessage />
                       </FormItem>
                     )}

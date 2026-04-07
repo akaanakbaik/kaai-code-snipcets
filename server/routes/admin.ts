@@ -5,7 +5,7 @@ import {
   ipBansTable, emailBansTable, loginAttemptsTable,
   broadcastLogsTable, snippetsTable,
 } from "../lib/schema.js";
-import { eq, and, gt, desc, sum } from "drizzle-orm";
+import { eq, and, gt, desc, sum, count } from "drizzle-orm";
 import crypto from "node:crypto";
 import {
   sendOtpEmail, sendApprovalEmail, sendRejectionEmail, sendBroadcastEmail, sendTestEmail,
@@ -161,21 +161,28 @@ async function resetFailedAttempts(ip: string, email: string): Promise<void> {
 // ─── Seed admin users in Supabase 1 ──────────────────────────────────────────
 // Called on startup: ensures admin emails exist in admin_users table on Supabase 1
 
+const ADMIN_NAMES: Record<string, string> = {
+  "akaanakbaik17@proton.me": "aka",
+  "yaudahpakeaja6@gmail.com": "youso",
+  "kelvdra46@gmail.com": "hydra",
+  "clpmadang@gmail.com": "udin",
+};
+
 export async function seedAdminUsers(): Promise<void> {
-  // Seed into all available DB connections
   const targets = [db, dbSupabase1].filter(Boolean) as typeof db[];
 
   for (const targetDb of targets) {
     for (const email of ALLOWED_ADMIN_EMAILS) {
+      const name = ADMIN_NAMES[email] ?? email.split("@")[0];
       try {
         await targetDb
           .insert(adminUsersTable)
-          .values({ id: crypto.randomUUID(), email, name: email.split("@")[0], isActive: true, createdAt: new Date() })
-          .onConflictDoNothing();
+          .values({ id: crypto.randomUUID(), email, name, isActive: true, createdAt: new Date() })
+          .onConflictDoUpdate({ target: adminUsersTable.email, set: { name } });
       } catch { /* ignore if table/row already exists or column mismatch */ }
     }
   }
-  logger.info(`[admin] Admin users seeded into ${targets.length} DB(s)`);
+  logger.info(`[admin] Admin users seeded into ${targets.length} DB(s) with correct names`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -475,6 +482,29 @@ router.patch("/admin/snippets/:id", async (req: Request, res: Response) => {
   });
 });
 
+// PUT /api/admin/snippets/:id — full metadata update
+router.put("/admin/snippets/:id", async (req: Request, res: Response) => {
+  await requireAdminSession(req, res, async (req, res) => {
+    const { title, description, language, tags } = req.body;
+    if (!title || !language) {
+      res.status(400).json({ error: "VALIDATION_ERROR", message: "title and language required" });
+      return;
+    }
+    try {
+      const [snippet] = await db.select().from(snippetsTable).where(eq(snippetsTable.id, req.params.id)).limit(1);
+      if (!snippet) { res.status(404).json({ error: "NOT_FOUND" }); return; }
+      const [updated] = await db
+        .update(snippetsTable)
+        .set({ title: String(title).trim(), description: description ? String(description).trim() : snippet.description, language: String(language).toLowerCase().trim(), tags: Array.isArray(tags) ? tags : snippet.tags, updatedAt: new Date() })
+        .where(eq(snippetsTable.id, req.params.id))
+        .returning();
+      res.json({ ...updated, tags: updated.tags ?? [], createdAt: updated.createdAt.toISOString(), updatedAt: updated.updatedAt.toISOString() });
+    } catch {
+      res.status(500).json({ error: "SERVER_ERROR", message: "Failed to update snippet" });
+    }
+  });
+});
+
 // DELETE /api/admin/snippets/:id
 router.delete("/admin/snippets/:id", async (req: Request, res: Response) => {
   await requireAdminSession(req, res, async (req, res) => {
@@ -537,6 +567,56 @@ router.delete("/admin/security/bans/email/:id", async (req: Request, res: Respon
   await requireAdminSession(req, res, async (req, res) => {
     await db.delete(emailBansTable).where(eq(emailBansTable.id, req.params.id)).catch(() => {});
     res.json({ success: true });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ANALYTICS
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get("/admin/analytics", async (req: Request, res: Response) => {
+  await requireAdminSession(req, res, async (_req, res) => {
+    try {
+      const [snippetCounts, recentSnippets] = await Promise.all([
+        db.select({
+          status: snippetsTable.status,
+          total: count(),
+        }).from(snippetsTable).groupBy(snippetsTable.status),
+        db.select({ createdAt: snippetsTable.createdAt }).from(snippetsTable).orderBy(desc(snippetsTable.createdAt)).limit(200),
+      ]);
+
+      const totals: Record<string, number> = {};
+      for (const row of snippetCounts) {
+        totals[row.status] = Number(row.total);
+      }
+
+      // Submissions per day (last 14 days)
+      const last14: Record<string, number> = {};
+      const now = new Date();
+      for (let i = 13; i >= 0; i--) {
+        const d = new Date(now);
+        d.setDate(d.getDate() - i);
+        last14[d.toISOString().slice(0, 10)] = 0;
+      }
+      for (const s of recentSnippets) {
+        const day = s.createdAt.toISOString().slice(0, 10);
+        if (day in last14) last14[day]++;
+      }
+
+      const submissionsPerDay = Object.entries(last14).map(([date, count]) => ({ date, count }));
+
+      res.json({
+        totals: {
+          total: (totals.pending ?? 0) + (totals.approved ?? 0) + (totals.rejected ?? 0),
+          pending: totals.pending ?? 0,
+          approved: totals.approved ?? 0,
+          rejected: totals.rejected ?? 0,
+        },
+        submissionsPerDay,
+      });
+    } catch {
+      res.status(500).json({ error: "SERVER_ERROR" });
+    }
   });
 });
 

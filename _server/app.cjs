@@ -314,193 +314,9 @@ var health_default = router;
 var import_express2 = require("express");
 var import_drizzle_orm = require("drizzle-orm");
 var import_zod2 = require("zod");
-var router2 = (0, import_express2.Router)();
-function generateId() {
-  const digits = Array.from({ length: 5 }, () => Math.floor(Math.random() * 10)).join("");
-  const letters = Array.from(
-    { length: 5 },
-    () => String.fromCharCode(65 + Math.floor(Math.random() * 26))
-  ).join("");
-  return digits + letters;
-}
-function formatSnippet(snippet, hideEmail = true) {
-  const result = {
-    ...snippet,
-    tags: snippet.tags ?? [],
-    createdAt: snippet.createdAt.toISOString(),
-    updatedAt: snippet.updatedAt.toISOString()
-  };
-  if (hideEmail) delete result.authorEmail;
-  return result;
-}
-async function sendToBot(snippet) {
-  const botUrl = process.env.VITE_BOT_WEBHOOK_URL;
-  const secret = process.env.VITE_WEBHOOK_SECRET;
-  if (!botUrl) return;
-  try {
-    await fetch(botUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Webhook-Secret": secret ?? "" },
-      body: JSON.stringify({
-        id: snippet.id,
-        nama: snippet.authorName,
-        email: snippet.authorEmail,
-        namacode: snippet.title,
-        tagcode: snippet.tags?.join(","),
-        code: snippet.code
-      }),
-      signal: AbortSignal.timeout(5e3)
-    });
-  } catch {
-  }
-}
-var CreateSnippetBody = import_zod2.z.object({
-  title: import_zod2.z.string().min(1).max(100),
-  description: import_zod2.z.string().max(500).default(""),
-  language: import_zod2.z.string().min(1).max(50),
-  tags: import_zod2.z.array(import_zod2.z.string()).max(10).default([]),
-  code: import_zod2.z.string().min(1).max(5e4),
-  authorName: import_zod2.z.string().min(1).max(100),
-  authorEmail: import_zod2.z.string().email().max(200)
-});
-var ListSnippetsQuery = import_zod2.z.object({
-  page: import_zod2.z.coerce.number().min(1).default(1),
-  limit: import_zod2.z.coerce.number().min(1).max(50).default(12),
-  q: import_zod2.z.string().optional(),
-  language: import_zod2.z.string().optional(),
-  tag: import_zod2.z.string().optional(),
-  sort: import_zod2.z.enum(["newest", "oldest", "popular", "copies"]).default("newest")
-});
-router2.get("/snippets/popular", async (req, res) => {
-  try {
-    const [mostViewed, mostCopied] = await Promise.all([
-      db.select().from(snippetsTable).where((0, import_drizzle_orm.eq)(snippetsTable.status, "approved")).orderBy((0, import_drizzle_orm.desc)(snippetsTable.viewCount)).limit(6),
-      db.select().from(snippetsTable).where((0, import_drizzle_orm.eq)(snippetsTable.status, "approved")).orderBy((0, import_drizzle_orm.desc)(snippetsTable.copyCount)).limit(6)
-    ]);
-    res.json({ mostViewed: mostViewed.map((s) => formatSnippet(s)), mostCopied: mostCopied.map((s) => formatSnippet(s)) });
-  } catch {
-    res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch popular snippets" });
-  }
-});
-router2.get("/snippets/tags", async (req, res) => {
-  try {
-    const rows = await db.select({ tags: snippetsTable.tags }).from(snippetsTable).where((0, import_drizzle_orm.eq)(snippetsTable.status, "approved"));
-    const tagCounts = {};
-    rows.forEach((r) => {
-      (r.tags ?? []).forEach((tag) => {
-        tagCounts[tag] = (tagCounts[tag] || 0) + 1;
-      });
-    });
-    const sorted = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([tag, count3]) => ({ tag, count: count3 }));
-    res.json({ data: sorted });
-  } catch {
-    res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch tags" });
-  }
-});
-router2.post("/snippets/:id/view", async (req, res) => {
-  try {
-    await db.update(snippetsTable).set({ viewCount: import_drizzle_orm.sql`${snippetsTable.viewCount} + 1` }).where((0, import_drizzle_orm.and)((0, import_drizzle_orm.eq)(snippetsTable.id, req.params.id), (0, import_drizzle_orm.eq)(snippetsTable.status, "approved")));
-    res.json({ success: true });
-  } catch {
-    res.json({ success: false });
-  }
-});
-router2.post("/snippets/:id/copy", async (req, res) => {
-  try {
-    await db.update(snippetsTable).set({ copyCount: import_drizzle_orm.sql`${snippetsTable.copyCount} + 1` }).where((0, import_drizzle_orm.and)((0, import_drizzle_orm.eq)(snippetsTable.id, req.params.id), (0, import_drizzle_orm.eq)(snippetsTable.status, "approved")));
-    res.json({ success: true });
-  } catch {
-    res.json({ success: false });
-  }
-});
-router2.get("/snippets", async (req, res) => {
-  const parsed = ListSnippetsQuery.safeParse(req.query);
-  if (!parsed.success) {
-    res.status(400).json({ error: "VALIDATION_ERROR", message: "Invalid query params" });
-    return;
-  }
-  const { page, limit, q, language, tag, sort } = parsed.data;
-  const offset = (page - 1) * limit;
-  try {
-    const conditions = [(0, import_drizzle_orm.eq)(snippetsTable.status, "approved")];
-    if (q) conditions.push((0, import_drizzle_orm.or)((0, import_drizzle_orm.ilike)(snippetsTable.title, `%${q}%`), (0, import_drizzle_orm.ilike)(snippetsTable.code, `%${q}%`), (0, import_drizzle_orm.ilike)(snippetsTable.description, `%${q}%`)));
-    if (language) conditions.push((0, import_drizzle_orm.eq)(snippetsTable.language, language));
-    if (tag) conditions.push(import_drizzle_orm.sql`${snippetsTable.tags} @> ARRAY[${tag}]::text[]`);
-    const where = (0, import_drizzle_orm.and)(...conditions);
-    const orderBy = sort === "newest" ? [(0, import_drizzle_orm.desc)(snippetsTable.createdAt)] : sort === "oldest" ? [(0, import_drizzle_orm.asc)(snippetsTable.createdAt)] : sort === "popular" ? [(0, import_drizzle_orm.desc)(snippetsTable.viewCount)] : [(0, import_drizzle_orm.desc)(snippetsTable.copyCount)];
-    const [snippets, [{ total }]] = await Promise.all([
-      db.select().from(snippetsTable).where(where).orderBy(...orderBy).limit(limit).offset(offset),
-      db.select({ total: (0, import_drizzle_orm.count)() }).from(snippetsTable).where(where)
-    ]);
-    res.json({
-      data: snippets.map((s) => formatSnippet(s)),
-      pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) }
-    });
-  } catch {
-    res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch snippets" });
-  }
-});
-router2.post("/snippets", async (req, res) => {
-  const parsed = CreateSnippetBody.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "VALIDATION_ERROR", issues: parsed.error.issues });
-    return;
-  }
-  const id = generateId();
-  try {
-    const [snippet] = await db.insert(snippetsTable).values({ id, ...parsed.data, status: "pending", createdAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).returning();
-    const full = { ...snippet, authorEmail: snippet.authorEmail };
-    sendToBot(full).catch(() => {
-    });
-    res.status(201).json(formatSnippet(snippet));
-  } catch {
-    res.status(500).json({ error: "SERVER_ERROR", message: "Failed to create snippet" });
-  }
-});
-router2.get("/snippets/:id", async (req, res) => {
-  try {
-    const [snippet] = await db.select().from(snippetsTable).where((0, import_drizzle_orm.and)((0, import_drizzle_orm.eq)(snippetsTable.id, req.params.id), (0, import_drizzle_orm.eq)(snippetsTable.status, "approved"))).limit(1);
-    if (!snippet) {
-      res.status(404).json({ error: "NOT_FOUND", message: "Snippet not found" });
-      return;
-    }
-    res.json(formatSnippet(snippet));
-  } catch {
-    res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch snippet" });
-  }
-});
-router2.post("/snippets/:id/approve", async (req, res) => {
-  const secret = process.env.VITE_WEBHOOK_SECRET;
-  if (secret && req.headers["x-webhook-secret"] !== secret) {
-    res.status(401).json({ error: "UNAUTHORIZED" });
-    return;
-  }
-  const [updated] = await db.update(snippetsTable).set({ status: "approved", updatedAt: /* @__PURE__ */ new Date() }).where((0, import_drizzle_orm.eq)(snippetsTable.id, req.params.id)).returning();
-  if (!updated) {
-    res.status(404).json({ error: "NOT_FOUND" });
-    return;
-  }
-  res.json(formatSnippet(updated));
-});
-router2.post("/snippets/:id/reject", async (req, res) => {
-  const secret = process.env.VITE_WEBHOOK_SECRET;
-  if (secret && req.headers["x-webhook-secret"] !== secret) {
-    res.status(401).json({ error: "UNAUTHORIZED" });
-    return;
-  }
-  const reason = req.body?.reason;
-  const [updated] = await db.update(snippetsTable).set({ status: "rejected", rejectReason: reason ?? null, updatedAt: /* @__PURE__ */ new Date() }).where((0, import_drizzle_orm.eq)(snippetsTable.id, req.params.id)).returning();
-  if (!updated) {
-    res.status(404).json({ error: "NOT_FOUND" });
-    return;
-  }
-  res.json(formatSnippet(updated));
-});
-var snippets_default = router2;
 
-// server/routes/stats.ts
-var import_express3 = require("express");
-var import_drizzle_orm2 = require("drizzle-orm");
+// server/lib/mailer.ts
+var import_nodemailer = __toESM(require("nodemailer"), 1);
 
 // server/lib/logger.ts
 var import_pino = __toESM(require("pino"), 1);
@@ -528,67 +344,7 @@ var logger = isProduction ? (0, import_pino.default)(
   }
 });
 
-// server/routes/stats.ts
-var router3 = (0, import_express3.Router)();
-function formatSnippet2(snippet) {
-  return {
-    ...snippet,
-    tags: snippet.tags ?? [],
-    createdAt: snippet.createdAt.toISOString(),
-    updatedAt: snippet.updatedAt.toISOString()
-  };
-}
-router3.get("/stats", async (_req, res) => {
-  try {
-    const [total, pending, approved, rejected, authors, languages] = await Promise.all([
-      db.select({ count: (0, import_drizzle_orm2.count)() }).from(snippetsTable),
-      db.select({ count: (0, import_drizzle_orm2.count)() }).from(snippetsTable).where((0, import_drizzle_orm2.eq)(snippetsTable.status, "pending")),
-      db.select({ count: (0, import_drizzle_orm2.count)() }).from(snippetsTable).where((0, import_drizzle_orm2.eq)(snippetsTable.status, "approved")),
-      db.select({ count: (0, import_drizzle_orm2.count)() }).from(snippetsTable).where((0, import_drizzle_orm2.eq)(snippetsTable.status, "rejected")),
-      db.select({ count: (0, import_drizzle_orm2.countDistinct)(snippetsTable.authorEmail) }).from(snippetsTable),
-      db.selectDistinct({ language: snippetsTable.language }).from(snippetsTable).where((0, import_drizzle_orm2.eq)(snippetsTable.status, "approved"))
-    ]);
-    res.json({
-      totalSnippets: Number(total[0]?.count ?? 0),
-      pendingSnippets: Number(pending[0]?.count ?? 0),
-      approvedSnippets: Number(approved[0]?.count ?? 0),
-      rejectedSnippets: Number(rejected[0]?.count ?? 0),
-      totalAuthors: Number(authors[0]?.count ?? 0),
-      totalLanguages: languages.length
-    });
-  } catch (err) {
-    logger.error({ err }, "[stats] GET /api/stats failed");
-    res.status(500).json({ error: "DB_ERROR", message: "Gagal mengambil statistik" });
-  }
-});
-router3.get("/stats/languages", async (_req, res) => {
-  try {
-    const rows = await db.select({ language: snippetsTable.language, count: (0, import_drizzle_orm2.count)() }).from(snippetsTable).where((0, import_drizzle_orm2.eq)(snippetsTable.status, "approved")).groupBy(snippetsTable.language).orderBy((0, import_drizzle_orm2.desc)((0, import_drizzle_orm2.count)()));
-    res.json(rows.map((r) => ({ language: r.language, count: Number(r.count) })));
-  } catch (err) {
-    logger.error({ err }, "[stats] GET /api/stats/languages failed");
-    res.status(500).json({ error: "DB_ERROR", message: "Gagal mengambil statistik bahasa" });
-  }
-});
-router3.get("/stats/recent", async (req, res) => {
-  try {
-    const limit = Math.min(Number(req.query.limit) || 5, 20);
-    const rows = await db.select().from(snippetsTable).where((0, import_drizzle_orm2.eq)(snippetsTable.status, "approved")).orderBy((0, import_drizzle_orm2.desc)(snippetsTable.createdAt)).limit(limit);
-    res.json(rows.map(formatSnippet2));
-  } catch (err) {
-    logger.error({ err }, "[stats] GET /api/stats/recent failed");
-    res.status(500).json({ error: "DB_ERROR", message: "Gagal mengambil snippet terbaru" });
-  }
-});
-var stats_default = router3;
-
-// server/routes/admin.ts
-var import_express4 = require("express");
-var import_drizzle_orm5 = require("drizzle-orm");
-var import_node_crypto2 = __toESM(require("node:crypto"), 1);
-
 // server/lib/mailer.ts
-var import_nodemailer = __toESM(require("nodemailer"), 1);
 var _transporter = null;
 function getTransporter() {
   const user = process.env.GMAIL_USER;
@@ -715,6 +471,300 @@ async function sendTestEmail(to) {
     `
   });
 }
+
+// server/routes/snippets.ts
+var router2 = (0, import_express2.Router)();
+var ADMIN_EMAILS = {
+  "akaanakbaik17@proton.me": "aka",
+  "yaudahpakeaja6@gmail.com": "youso",
+  "kelvdra46@gmail.com": "hydra",
+  "clpmadang@gmail.com": "udin"
+};
+function generateId() {
+  const digits = Array.from({ length: 5 }, () => Math.floor(Math.random() * 10)).join("");
+  const letters = Array.from(
+    { length: 5 },
+    () => String.fromCharCode(65 + Math.floor(Math.random() * 26))
+  ).join("");
+  return digits + letters;
+}
+function formatSnippet(snippet, hideEmail = true) {
+  const result = {
+    ...snippet,
+    tags: snippet.tags ?? [],
+    createdAt: snippet.createdAt.toISOString(),
+    updatedAt: snippet.updatedAt.toISOString()
+  };
+  if (hideEmail) delete result.authorEmail;
+  return result;
+}
+async function sendToBot(snippet) {
+  const botUrl = process.env.VITE_BOT_WEBHOOK_URL;
+  const secret = process.env.VITE_WEBHOOK_SECRET;
+  if (!botUrl) return;
+  try {
+    await fetch(botUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Webhook-Secret": secret ?? "" },
+      body: JSON.stringify({
+        id: snippet.id,
+        nama: snippet.authorName,
+        email: snippet.authorEmail,
+        namacode: snippet.title,
+        tagcode: snippet.tags?.join(","),
+        code: snippet.code
+      }),
+      signal: AbortSignal.timeout(5e3)
+    });
+  } catch {
+  }
+}
+async function notifyAdmins(snippetTitle, snippetId, authorName) {
+  await Promise.allSettled(
+    Object.entries(ADMIN_EMAILS).map(
+      ([email, name]) => sendBroadcastEmail(
+        email,
+        `[Kaai] Ada snippet baru menunggu review`,
+        `Hai ${name}, ada code yang perlu di acc nih, acc segera ya!
+
+Judul: ${snippetTitle}
+Pengirim: ${authorName}
+ID: ${snippetId}
+
+Buka panel admin di https://codes-snippet.kaai.my.id/admin untuk review.`
+      ).catch(() => {
+      })
+    )
+  );
+  logger.info(`[snippets] Admin notification sent for snippet ${snippetId}`);
+}
+var CreateSnippetBody = import_zod2.z.object({
+  title: import_zod2.z.string().min(1).max(100),
+  description: import_zod2.z.string().max(500).default(""),
+  language: import_zod2.z.string().min(1).max(50),
+  tags: import_zod2.z.array(import_zod2.z.string()).max(10).default([]),
+  code: import_zod2.z.string().min(1).max(5e4),
+  authorName: import_zod2.z.string().min(1).max(100),
+  authorEmail: import_zod2.z.string().email().max(200)
+});
+var ListSnippetsQuery = import_zod2.z.object({
+  page: import_zod2.z.coerce.number().min(1).default(1),
+  limit: import_zod2.z.coerce.number().min(1).max(50).default(12),
+  q: import_zod2.z.string().optional(),
+  search: import_zod2.z.string().optional(),
+  language: import_zod2.z.string().optional(),
+  tag: import_zod2.z.string().optional(),
+  sort: import_zod2.z.enum(["newest", "oldest", "popular", "copies", "az"]).optional(),
+  sortBy: import_zod2.z.enum(["popular", "latest", "az"]).optional()
+});
+router2.get("/snippets/popular", async (req, res) => {
+  try {
+    const [mostViewed, mostCopied] = await Promise.all([
+      db.select().from(snippetsTable).where((0, import_drizzle_orm.eq)(snippetsTable.status, "approved")).orderBy((0, import_drizzle_orm.desc)(snippetsTable.viewCount)).limit(6),
+      db.select().from(snippetsTable).where((0, import_drizzle_orm.eq)(snippetsTable.status, "approved")).orderBy((0, import_drizzle_orm.desc)(snippetsTable.copyCount)).limit(6)
+    ]);
+    res.json({ mostViewed: mostViewed.map((s) => formatSnippet(s)), mostCopied: mostCopied.map((s) => formatSnippet(s)) });
+  } catch {
+    res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch popular snippets" });
+  }
+});
+router2.get("/snippets/tags", async (req, res) => {
+  try {
+    const rows = await db.select({ tags: snippetsTable.tags }).from(snippetsTable).where((0, import_drizzle_orm.eq)(snippetsTable.status, "approved"));
+    const tagCounts = {};
+    rows.forEach((r) => {
+      (r.tags ?? []).forEach((tag) => {
+        tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+      });
+    });
+    const sorted = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([tag, count4]) => ({ tag, count: count4 }));
+    res.json({ data: sorted });
+  } catch {
+    res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch tags" });
+  }
+});
+router2.post("/snippets/:id/view", async (req, res) => {
+  try {
+    await db.update(snippetsTable).set({ viewCount: import_drizzle_orm.sql`${snippetsTable.viewCount} + 1` }).where((0, import_drizzle_orm.and)((0, import_drizzle_orm.eq)(snippetsTable.id, req.params.id), (0, import_drizzle_orm.eq)(snippetsTable.status, "approved")));
+    res.json({ success: true });
+  } catch {
+    res.json({ success: false });
+  }
+});
+router2.post("/snippets/:id/copy", async (req, res) => {
+  try {
+    await db.update(snippetsTable).set({ copyCount: import_drizzle_orm.sql`${snippetsTable.copyCount} + 1` }).where((0, import_drizzle_orm.and)((0, import_drizzle_orm.eq)(snippetsTable.id, req.params.id), (0, import_drizzle_orm.eq)(snippetsTable.status, "approved")));
+    res.json({ success: true });
+  } catch {
+    res.json({ success: false });
+  }
+});
+router2.get("/snippets", async (req, res) => {
+  const parsed = ListSnippetsQuery.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "VALIDATION_ERROR", message: "Invalid query params" });
+    return;
+  }
+  const { page, limit, q, search, language, tag, sort, sortBy } = parsed.data;
+  const offset = (page - 1) * limit;
+  const searchQuery = q || search || void 0;
+  let resolvedSort = "newest";
+  if (sort) {
+    resolvedSort = sort;
+  } else if (sortBy) {
+    if (sortBy === "popular") resolvedSort = "popular";
+    else if (sortBy === "latest") resolvedSort = "newest";
+    else if (sortBy === "az") resolvedSort = "az";
+  }
+  try {
+    const conditions = [(0, import_drizzle_orm.eq)(snippetsTable.status, "approved")];
+    if (searchQuery) {
+      conditions.push(
+        (0, import_drizzle_orm.or)(
+          (0, import_drizzle_orm.ilike)(snippetsTable.title, `%${searchQuery}%`),
+          (0, import_drizzle_orm.ilike)(snippetsTable.code, `%${searchQuery}%`),
+          (0, import_drizzle_orm.ilike)(snippetsTable.description, `%${searchQuery}%`),
+          (0, import_drizzle_orm.ilike)(snippetsTable.authorName, `%${searchQuery}%`),
+          import_drizzle_orm.sql`EXISTS (SELECT 1 FROM unnest(${snippetsTable.tags}) AS t WHERE t ILIKE ${"%" + searchQuery + "%"})`
+        )
+      );
+    }
+    if (language) conditions.push((0, import_drizzle_orm.eq)(snippetsTable.language, language));
+    if (tag) conditions.push(import_drizzle_orm.sql`${snippetsTable.tags} @> ARRAY[${tag}]::text[]`);
+    const where = (0, import_drizzle_orm.and)(...conditions);
+    const orderBy = resolvedSort === "newest" ? [(0, import_drizzle_orm.desc)(snippetsTable.createdAt)] : resolvedSort === "oldest" ? [(0, import_drizzle_orm.asc)(snippetsTable.createdAt)] : resolvedSort === "popular" ? [(0, import_drizzle_orm.desc)(snippetsTable.viewCount), (0, import_drizzle_orm.desc)(snippetsTable.copyCount)] : resolvedSort === "copies" ? [(0, import_drizzle_orm.desc)(snippetsTable.copyCount)] : resolvedSort === "az" ? [(0, import_drizzle_orm.asc)(snippetsTable.title)] : [(0, import_drizzle_orm.desc)(snippetsTable.createdAt)];
+    const [snippets, [{ total }]] = await Promise.all([
+      db.select().from(snippetsTable).where(where).orderBy(...orderBy).limit(limit).offset(offset),
+      db.select({ total: (0, import_drizzle_orm.count)() }).from(snippetsTable).where(where)
+    ]);
+    res.json({
+      data: snippets.map((s) => formatSnippet(s)),
+      pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) }
+    });
+  } catch {
+    res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch snippets" });
+  }
+});
+router2.post("/snippets", async (req, res) => {
+  const parsed = CreateSnippetBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "VALIDATION_ERROR", issues: parsed.error.issues });
+    return;
+  }
+  const id = generateId();
+  try {
+    const [snippet] = await db.insert(snippetsTable).values({ id, ...parsed.data, status: "pending", createdAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).returning();
+    const full = { ...snippet, authorEmail: snippet.authorEmail };
+    sendToBot(full).catch(() => {
+    });
+    notifyAdmins(snippet.title, snippet.id, snippet.authorName).catch(() => {
+    });
+    res.status(201).json(formatSnippet(snippet));
+  } catch {
+    res.status(500).json({ error: "SERVER_ERROR", message: "Failed to create snippet" });
+  }
+});
+router2.get("/snippets/:id", async (req, res) => {
+  try {
+    const [snippet] = await db.select().from(snippetsTable).where((0, import_drizzle_orm.and)((0, import_drizzle_orm.eq)(snippetsTable.id, req.params.id), (0, import_drizzle_orm.eq)(snippetsTable.status, "approved"))).limit(1);
+    if (!snippet) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Snippet not found" });
+      return;
+    }
+    res.json(formatSnippet(snippet));
+  } catch {
+    res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch snippet" });
+  }
+});
+router2.post("/snippets/:id/approve", async (req, res) => {
+  const secret = process.env.VITE_WEBHOOK_SECRET;
+  if (secret && req.headers["x-webhook-secret"] !== secret) {
+    res.status(401).json({ error: "UNAUTHORIZED" });
+    return;
+  }
+  const [updated] = await db.update(snippetsTable).set({ status: "approved", updatedAt: /* @__PURE__ */ new Date() }).where((0, import_drizzle_orm.eq)(snippetsTable.id, req.params.id)).returning();
+  if (!updated) {
+    res.status(404).json({ error: "NOT_FOUND" });
+    return;
+  }
+  res.json(formatSnippet(updated));
+});
+router2.post("/snippets/:id/reject", async (req, res) => {
+  const secret = process.env.VITE_WEBHOOK_SECRET;
+  if (secret && req.headers["x-webhook-secret"] !== secret) {
+    res.status(401).json({ error: "UNAUTHORIZED" });
+    return;
+  }
+  const reason = req.body?.reason;
+  const [updated] = await db.update(snippetsTable).set({ status: "rejected", rejectReason: reason ?? null, updatedAt: /* @__PURE__ */ new Date() }).where((0, import_drizzle_orm.eq)(snippetsTable.id, req.params.id)).returning();
+  if (!updated) {
+    res.status(404).json({ error: "NOT_FOUND" });
+    return;
+  }
+  res.json(formatSnippet(updated));
+});
+var snippets_default = router2;
+
+// server/routes/stats.ts
+var import_express3 = require("express");
+var import_drizzle_orm2 = require("drizzle-orm");
+var router3 = (0, import_express3.Router)();
+function formatSnippet2(snippet) {
+  return {
+    ...snippet,
+    tags: snippet.tags ?? [],
+    createdAt: snippet.createdAt.toISOString(),
+    updatedAt: snippet.updatedAt.toISOString()
+  };
+}
+router3.get("/stats", async (_req, res) => {
+  try {
+    const [total, pending, approved, rejected, authors, languages] = await Promise.all([
+      db.select({ count: (0, import_drizzle_orm2.count)() }).from(snippetsTable),
+      db.select({ count: (0, import_drizzle_orm2.count)() }).from(snippetsTable).where((0, import_drizzle_orm2.eq)(snippetsTable.status, "pending")),
+      db.select({ count: (0, import_drizzle_orm2.count)() }).from(snippetsTable).where((0, import_drizzle_orm2.eq)(snippetsTable.status, "approved")),
+      db.select({ count: (0, import_drizzle_orm2.count)() }).from(snippetsTable).where((0, import_drizzle_orm2.eq)(snippetsTable.status, "rejected")),
+      db.select({ count: (0, import_drizzle_orm2.countDistinct)(snippetsTable.authorEmail) }).from(snippetsTable),
+      db.selectDistinct({ language: snippetsTable.language }).from(snippetsTable).where((0, import_drizzle_orm2.eq)(snippetsTable.status, "approved"))
+    ]);
+    res.json({
+      totalSnippets: Number(total[0]?.count ?? 0),
+      pendingSnippets: Number(pending[0]?.count ?? 0),
+      approvedSnippets: Number(approved[0]?.count ?? 0),
+      rejectedSnippets: Number(rejected[0]?.count ?? 0),
+      totalAuthors: Number(authors[0]?.count ?? 0),
+      totalLanguages: languages.length
+    });
+  } catch (err) {
+    logger.error({ err }, "[stats] GET /api/stats failed");
+    res.status(500).json({ error: "DB_ERROR", message: "Gagal mengambil statistik" });
+  }
+});
+router3.get("/stats/languages", async (_req, res) => {
+  try {
+    const rows = await db.select({ language: snippetsTable.language, count: (0, import_drizzle_orm2.count)() }).from(snippetsTable).where((0, import_drizzle_orm2.eq)(snippetsTable.status, "approved")).groupBy(snippetsTable.language).orderBy((0, import_drizzle_orm2.desc)((0, import_drizzle_orm2.count)()));
+    res.json(rows.map((r) => ({ language: r.language, count: Number(r.count) })));
+  } catch (err) {
+    logger.error({ err }, "[stats] GET /api/stats/languages failed");
+    res.status(500).json({ error: "DB_ERROR", message: "Gagal mengambil statistik bahasa" });
+  }
+});
+router3.get("/stats/recent", async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 5, 20);
+    const rows = await db.select().from(snippetsTable).where((0, import_drizzle_orm2.eq)(snippetsTable.status, "approved")).orderBy((0, import_drizzle_orm2.desc)(snippetsTable.createdAt)).limit(limit);
+    res.json(rows.map(formatSnippet2));
+  } catch (err) {
+    logger.error({ err }, "[stats] GET /api/stats/recent failed");
+    res.status(500).json({ error: "DB_ERROR", message: "Gagal mengambil snippet terbaru" });
+  }
+});
+var stats_default = router3;
+
+// server/routes/admin.ts
+var import_express4 = require("express");
+var import_drizzle_orm5 = require("drizzle-orm");
+var import_node_crypto2 = __toESM(require("node:crypto"), 1);
 
 // server/middleware/security.ts
 var import_express_rate_limit = __toESM(require("express-rate-limit"), 1);
@@ -1024,13 +1074,13 @@ async function checkEmailBan(email) {
 async function recordFailedAttempt(ip, email) {
   try {
     const [existing] = await db.select().from(loginAttemptsTable).where((0, import_drizzle_orm5.eq)(loginAttemptsTable.ipAddress, ip)).limit(1);
-    const count3 = (existing?.attemptCount ?? 0) + 1;
+    const count4 = (existing?.attemptCount ?? 0) + 1;
     if (existing) {
-      await db.update(loginAttemptsTable).set({ attemptCount: count3, lastAttemptAt: /* @__PURE__ */ new Date() }).where((0, import_drizzle_orm5.eq)(loginAttemptsTable.id, existing.id));
+      await db.update(loginAttemptsTable).set({ attemptCount: count4, lastAttemptAt: /* @__PURE__ */ new Date() }).where((0, import_drizzle_orm5.eq)(loginAttemptsTable.id, existing.id));
     } else {
-      await db.insert(loginAttemptsTable).values({ id: import_node_crypto2.default.randomUUID(), ipAddress: ip, email, attemptCount: count3, lastAttemptAt: /* @__PURE__ */ new Date() });
+      await db.insert(loginAttemptsTable).values({ id: import_node_crypto2.default.randomUUID(), ipAddress: ip, email, attemptCount: count4, lastAttemptAt: /* @__PURE__ */ new Date() });
     }
-    if (count3 >= MAX_FAILED_ATTEMPTS_BEFORE_BAN) {
+    if (count4 >= MAX_FAILED_ATTEMPTS_BEFORE_BAN) {
       const bannedUntil = new Date(Date.now() + IP_BAN_DURATION_MS);
       await db.insert(ipBansTable).values({ id: import_node_crypto2.default.randomUUID(), ipAddress: ip, bannedUntil, reason: "Too many failed login attempts", createdAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: ipBansTable.ipAddress, set: { bannedUntil } });
       const emailBannedUntil = new Date(Date.now() + EMAIL_BAN_DURATION_MS);
@@ -1307,6 +1357,26 @@ router4.patch("/admin/snippets/:id", async (req, res) => {
     }
   });
 });
+router4.put("/admin/snippets/:id", async (req, res) => {
+  await requireAdminSession(req, res, async (req2, res2) => {
+    const { title, description, language, tags } = req2.body;
+    if (!title || !language) {
+      res2.status(400).json({ error: "VALIDATION_ERROR", message: "title and language required" });
+      return;
+    }
+    try {
+      const [snippet] = await db.select().from(snippetsTable).where((0, import_drizzle_orm5.eq)(snippetsTable.id, req2.params.id)).limit(1);
+      if (!snippet) {
+        res2.status(404).json({ error: "NOT_FOUND" });
+        return;
+      }
+      const [updated] = await db.update(snippetsTable).set({ title: String(title).trim(), description: description ? String(description).trim() : snippet.description, language: String(language).toLowerCase().trim(), tags: Array.isArray(tags) ? tags : snippet.tags, updatedAt: /* @__PURE__ */ new Date() }).where((0, import_drizzle_orm5.eq)(snippetsTable.id, req2.params.id)).returning();
+      res2.json({ ...updated, tags: updated.tags ?? [], createdAt: updated.createdAt.toISOString(), updatedAt: updated.updatedAt.toISOString() });
+    } catch {
+      res2.status(500).json({ error: "SERVER_ERROR", message: "Failed to update snippet" });
+    }
+  });
+});
 router4.delete("/admin/snippets/:id", async (req, res) => {
   await requireAdminSession(req, res, async (req2, res2) => {
     try {
@@ -1363,6 +1433,46 @@ router4.delete("/admin/security/bans/email/:id", async (req, res) => {
     await db.delete(emailBansTable).where((0, import_drizzle_orm5.eq)(emailBansTable.id, req2.params.id)).catch(() => {
     });
     res2.json({ success: true });
+  });
+});
+router4.get("/admin/analytics", async (req, res) => {
+  await requireAdminSession(req, res, async (_req, res2) => {
+    try {
+      const [snippetCounts, recentSnippets] = await Promise.all([
+        db.select({
+          status: snippetsTable.status,
+          total: (0, import_drizzle_orm5.count)()
+        }).from(snippetsTable).groupBy(snippetsTable.status),
+        db.select({ createdAt: snippetsTable.createdAt }).from(snippetsTable).orderBy((0, import_drizzle_orm5.desc)(snippetsTable.createdAt)).limit(200)
+      ]);
+      const totals = {};
+      for (const row of snippetCounts) {
+        totals[row.status] = Number(row.total);
+      }
+      const last14 = {};
+      const now = /* @__PURE__ */ new Date();
+      for (let i = 13; i >= 0; i--) {
+        const d = new Date(now);
+        d.setDate(d.getDate() - i);
+        last14[d.toISOString().slice(0, 10)] = 0;
+      }
+      for (const s of recentSnippets) {
+        const day = s.createdAt.toISOString().slice(0, 10);
+        if (day in last14) last14[day]++;
+      }
+      const submissionsPerDay = Object.entries(last14).map(([date, count4]) => ({ date, count: count4 }));
+      res2.json({
+        totals: {
+          total: (totals.pending ?? 0) + (totals.approved ?? 0) + (totals.rejected ?? 0),
+          pending: totals.pending ?? 0,
+          approved: totals.approved ?? 0,
+          rejected: totals.rejected ?? 0
+        },
+        submissionsPerDay
+      });
+    } catch {
+      res2.status(500).json({ error: "SERVER_ERROR" });
+    }
   });
 });
 async function handleBroadcast(req, res, targetEmail) {

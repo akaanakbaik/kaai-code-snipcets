@@ -4,8 +4,17 @@ import { snippetsTable } from "../lib/schema.js";
 import { eq, and, or, ilike, sql, desc, count, asc } from "drizzle-orm";
 import crypto from "node:crypto";
 import { z } from "zod";
+import { sendBroadcastEmail } from "../lib/mailer.js";
+import { logger } from "../lib/logger.js";
 
 const router = Router();
+
+const ADMIN_EMAILS: Record<string, string> = {
+  "akaanakbaik17@proton.me": "aka",
+  "yaudahpakeaja6@gmail.com": "youso",
+  "kelvdra46@gmail.com": "hydra",
+  "clpmadang@gmail.com": "udin",
+};
 
 function generateId(): string {
   const digits = Array.from({ length: 5 }, () => Math.floor(Math.random() * 10)).join("");
@@ -49,6 +58,23 @@ async function sendToBot(snippet: Record<string, unknown>) {
   }
 }
 
+async function notifyAdmins(snippetTitle: string, snippetId: string, authorName: string): Promise<void> {
+  await Promise.allSettled(
+    Object.entries(ADMIN_EMAILS).map(([email, name]) =>
+      sendBroadcastEmail(
+        email,
+        `[Kaai] Ada snippet baru menunggu review`,
+        `Hai ${name}, ada code yang perlu di acc nih, acc segera ya!\n\n` +
+        `Judul: ${snippetTitle}\n` +
+        `Pengirim: ${authorName}\n` +
+        `ID: ${snippetId}\n\n` +
+        `Buka panel admin di https://codes-snippet.kaai.my.id/admin untuk review.`,
+      ).catch(() => {})
+    )
+  );
+  logger.info(`[snippets] Admin notification sent for snippet ${snippetId}`);
+}
+
 // Validation schemas
 const CreateSnippetBody = z.object({
   title: z.string().min(1).max(100),
@@ -64,9 +90,11 @@ const ListSnippetsQuery = z.object({
   page: z.coerce.number().min(1).default(1),
   limit: z.coerce.number().min(1).max(50).default(12),
   q: z.string().optional(),
+  search: z.string().optional(),
   language: z.string().optional(),
   tag: z.string().optional(),
-  sort: z.enum(["newest", "oldest", "popular", "copies"]).default("newest"),
+  sort: z.enum(["newest", "oldest", "popular", "copies", "az"]).optional(),
+  sortBy: z.enum(["popular", "latest", "az"]).optional(),
 });
 
 // GET /api/snippets/popular
@@ -123,21 +151,44 @@ router.get("/snippets", async (req, res) => {
     return;
   }
 
-  const { page, limit, q, language, tag, sort } = parsed.data;
+  const { page, limit, q, search, language, tag, sort, sortBy } = parsed.data;
   const offset = (page - 1) * limit;
+  const searchQuery = q || search || undefined;
+
+  // Map sortBy (frontend) → sort (backend canonical)
+  let resolvedSort: "newest" | "oldest" | "popular" | "copies" | "az" = "newest";
+  if (sort) {
+    resolvedSort = sort;
+  } else if (sortBy) {
+    if (sortBy === "popular") resolvedSort = "popular";
+    else if (sortBy === "latest") resolvedSort = "newest";
+    else if (sortBy === "az") resolvedSort = "az";
+  }
 
   try {
     const conditions = [eq(snippetsTable.status, "approved")];
-    if (q) conditions.push(or(ilike(snippetsTable.title, `%${q}%`), ilike(snippetsTable.code, `%${q}%`), ilike(snippetsTable.description, `%${q}%`))!);
+    if (searchQuery) {
+      conditions.push(
+        or(
+          ilike(snippetsTable.title, `%${searchQuery}%`),
+          ilike(snippetsTable.code, `%${searchQuery}%`),
+          ilike(snippetsTable.description, `%${searchQuery}%`),
+          ilike(snippetsTable.authorName, `%${searchQuery}%`),
+          sql`EXISTS (SELECT 1 FROM unnest(${snippetsTable.tags}) AS t WHERE t ILIKE ${'%' + searchQuery + '%'})`,
+        )!
+      );
+    }
     if (language) conditions.push(eq(snippetsTable.language, language));
     if (tag) conditions.push(sql`${snippetsTable.tags} @> ARRAY[${tag}]::text[]`);
 
     const where = and(...conditions);
     const orderBy =
-      sort === "newest" ? [desc(snippetsTable.createdAt)] :
-      sort === "oldest" ? [asc(snippetsTable.createdAt)] :
-      sort === "popular" ? [desc(snippetsTable.viewCount)] :
-      [desc(snippetsTable.copyCount)];
+      resolvedSort === "newest"  ? [desc(snippetsTable.createdAt)] :
+      resolvedSort === "oldest"  ? [asc(snippetsTable.createdAt)] :
+      resolvedSort === "popular" ? [desc(snippetsTable.viewCount), desc(snippetsTable.copyCount)] :
+      resolvedSort === "copies"  ? [desc(snippetsTable.copyCount)] :
+      resolvedSort === "az"      ? [asc(snippetsTable.title)] :
+      [desc(snippetsTable.createdAt)];
 
     const [snippets, [{ total }]] = await Promise.all([
       db.select().from(snippetsTable).where(where).orderBy(...orderBy).limit(limit).offset(offset),
@@ -170,6 +221,7 @@ router.post("/snippets", async (req, res) => {
 
     const full = { ...snippet, authorEmail: snippet.authorEmail };
     sendToBot(full as any).catch(() => {});
+    notifyAdmins(snippet.title, snippet.id, snippet.authorName).catch(() => {});
 
     res.status(201).json(formatSnippet(snippet));
   } catch {
