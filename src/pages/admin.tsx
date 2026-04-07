@@ -291,25 +291,44 @@ function ReviewTab({ auth, setLocation }: { auth: { ok: boolean; email: string }
 
       {/* Dialogs */}
       <Dialog open={!!selectedSnippet} onOpenChange={() => setSelectedSnippet(null)}>
-        <DialogContent className="max-w-3xl glass-card max-h-[85vh] overflow-auto">
+        <DialogContent className="w-[96vw] sm:max-w-3xl glass-card flex flex-col max-h-[90dvh] overflow-hidden p-0 gap-0">
           {selectedSnippet && (<>
-            <DialogHeader>
-              <DialogTitle className="font-heading">{selectedSnippet.title}</DialogTitle>
-              <DialogDescription><span className="flex flex-wrap gap-3 text-xs mt-1"><span className="flex items-center gap-1"><User className="w-3 h-3" />{selectedSnippet.authorName}</span><span className="flex items-center gap-1"><Mail className="w-3 h-3" />{selectedSnippet.authorEmail}</span></span></DialogDescription>
-            </DialogHeader>
-            <div className="space-y-3">
-              <p className="text-sm text-muted-foreground">{selectedSnippet.description}</p>
-              <div className="flex flex-wrap gap-1.5">{selectedSnippet.tags.map((t, i) => <span key={i} className="text-xs bg-secondary/50 text-muted-foreground px-2 py-0.5 rounded-md">#{t}</span>)}</div>
-              <div className="rounded-xl overflow-hidden border border-border/50">
-                <div className="bg-[#1e1e1e] px-4 py-2 text-xs font-mono text-[#858585] border-b border-white/5">{selectedSnippet.language}</div>
-                <pre className="p-4 overflow-auto text-sm font-mono text-blue-100/90 bg-[#1e1e1e] max-h-72 whitespace-pre">{selectedSnippet.code}</pre>
+            <div className="px-4 sm:px-6 pt-5 pb-3 border-b border-border/40 flex-shrink-0">
+              <DialogTitle className="font-heading text-base leading-snug pr-8">{selectedSnippet.title}</DialogTitle>
+              <div className="flex flex-wrap gap-3 text-xs mt-2 text-muted-foreground">
+                <span className="flex items-center gap-1"><User className="w-3 h-3" />{selectedSnippet.authorName}</span>
+                <span className="flex items-center gap-1 break-all"><Mail className="w-3 h-3 flex-shrink-0" />{selectedSnippet.authorEmail}</span>
               </div>
             </div>
-            <DialogFooter className="flex gap-2 flex-wrap">
+            <div className="flex-1 overflow-y-auto min-h-0 px-4 sm:px-6 py-3 space-y-3">
+              <p className="text-sm text-muted-foreground">{selectedSnippet.description}</p>
+              {selectedSnippet.tags.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">{selectedSnippet.tags.map((t, i) => <span key={i} className="text-xs bg-secondary/50 text-muted-foreground px-2 py-0.5 rounded-md">#{t}</span>)}</div>
+              )}
+              <div className="rounded-xl overflow-hidden border border-border/50 flex flex-col">
+                <div className="flex items-center justify-between bg-[#252526] px-3 py-2 border-b border-white/5 flex-shrink-0">
+                  <span className="text-xs font-mono text-[#858585]">{selectedSnippet.language}</span>
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(selectedSnippet.code); }}
+                    className="text-[10px] text-[#858585] hover:text-[#cccccc] hover:bg-white/5 px-2 py-1 rounded flex items-center gap-1 transition-colors"
+                  >
+                    <Copy className="w-3 h-3" /> Salin
+                  </button>
+                </div>
+                <div className="overflow-auto" style={{ maxHeight: "45dvh", minHeight: "100px" }}>
+                  <pre className="p-4 text-sm font-mono text-blue-100/90 bg-[#1e1e1e] whitespace-pre" style={{ minWidth: "max-content" }}>{selectedSnippet.code}</pre>
+                </div>
+                <div className="bg-[#1e1e1e] px-3 py-1.5 border-t border-white/5 text-[10px] font-mono text-[#555] flex justify-between flex-shrink-0">
+                  <span>{selectedSnippet.code.split("\n").length} baris</span>
+                  <span>{selectedSnippet.code.length.toLocaleString()} karakter</span>
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-2 flex-wrap px-4 sm:px-6 py-3 border-t border-border/40 flex-shrink-0 bg-background/30">
               <Button size="sm" variant="outline" onClick={() => setSelectedSnippet(null)}>Tutup</Button>
               <Button size="sm" className="bg-green-500/10 text-green-400 hover:bg-green-500/20 border border-green-500/20" onClick={() => { handleApprove(selectedSnippet.id); setSelectedSnippet(null); }}><Check className="w-3.5 h-3.5 mr-1.5" /> Setujui</Button>
               <Button size="sm" variant="outline" className="bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20" onClick={() => { setRejectId(selectedSnippet.id); setRejectReason(""); setRejectDialogOpen(true); setSelectedSnippet(null); }}><X className="w-3.5 h-3.5 mr-1.5" /> Tolak</Button>
-            </DialogFooter>
+            </div>
           </>)}
         </DialogContent>
       </Dialog>

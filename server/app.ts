@@ -181,12 +181,22 @@ async function runMigrations(): Promise<void> {
         banned_until TIMESTAMPTZ
       )`,
       `CREATE INDEX IF NOT EXISTS idx_snippet_lock_attempts_snippet_ip ON snippet_lock_attempts (snippet_id, ip_address)`,
+      `ALTER TABLE snippets ADD COLUMN IF NOT EXISTS lock_disabled_at TIMESTAMPTZ`,
+      `CREATE TABLE IF NOT EXISTS snippet_disable_lock_otps (
+        id TEXT PRIMARY KEY,
+        snippet_id TEXT NOT NULL,
+        author_email TEXT NOT NULL,
+        otp TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        used BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_sdlo_snippet ON snippet_disable_lock_otps (snippet_id)`,
       `INSERT INTO admin_users (id, email, name, is_active) VALUES
-        (gen_random_uuid()::text, 'akaanakbaik17@proton.me', 'Aka', TRUE),
+        (gen_random_uuid()::text, 'akaanakbaik17@proton.me', 'Superadmin', TRUE),
         (gen_random_uuid()::text, 'yaudahpakeaja6@gmail.com', 'Admin', TRUE),
         (gen_random_uuid()::text, 'kelvdra46@gmail.com', 'Kelv', TRUE),
-        (gen_random_uuid()::text, 'clpmadang@gmail.com', 'Admin', TRUE),
-        (gen_random_uuid()::text, 'khaliqarrasyidabdul@gmail.com', 'Superadmin', TRUE)
+        (gen_random_uuid()::text, 'clpmadang@gmail.com', 'Admin', TRUE)
        ON CONFLICT (email) DO NOTHING`,
     ];
 

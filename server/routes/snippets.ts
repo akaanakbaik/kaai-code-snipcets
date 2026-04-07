@@ -1,15 +1,15 @@
 import { Router, type Request, type Response } from "express";
 import { db } from "../lib/db.js";
-import { snippetsTable, snippetLockAttemptsTable } from "../lib/schema.js";
+import { snippetsTable, snippetLockAttemptsTable, snippetDisableLockOtpsTable } from "../lib/schema.js";
 import { eq, and, or, ilike, sql, desc, count, asc } from "drizzle-orm";
 import crypto from "node:crypto";
 import { z } from "zod";
-import { sendBroadcastEmail } from "../lib/mailer.js";
+import { sendBroadcastEmail, sendDisableLockOtpEmail } from "../lib/mailer.js";
 import { logger } from "../lib/logger.js";
 
 const router = Router();
 
-const SUPERADMIN_EMAIL = "khaliqarrasyidabdul@gmail.com";
+const SUPERADMIN_EMAIL = "akaanakbaik17@proton.me";
 const UNLOCK_SECRET = process.env.SNIPPET_UNLOCK_SECRET ?? "kaai-unlock-s3cr3t-2k25-xR9pQm7z";
 const MAX_LOCK_ATTEMPTS = 5;
 const LOCK_BAN_MS = 15 * 60 * 1000; // 15 minutes initial ban
@@ -85,6 +85,7 @@ function formatSnippet(
     copyCount: snippet.copyCount,
     isLocked: snippet.isLocked,
     lockType: snippet.isLocked ? (snippet.lockType ?? null) : null,
+    lockDisabledAt: snippet.lockDisabledAt ? snippet.lockDisabledAt.toISOString() : null,
     createdAt: snippet.createdAt.toISOString(),
     updatedAt: snippet.updatedAt.toISOString(),
   };
@@ -458,6 +459,94 @@ router.get("/snippets/:id", async (req: Request, res: Response) => {
   } catch {
     res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch snippet" });
   }
+});
+
+// ─── Disable Lock Permanently ────────────────────────────────────────────────
+
+router.post("/snippets/:id/disable-lock/request", async (req, res) => {
+  const { id } = req.params;
+  const { authorEmail } = req.body ?? {};
+
+  if (!authorEmail || typeof authorEmail !== "string") {
+    res.status(400).json({ error: "VALIDATION_ERROR", message: "Email penulis diperlukan" });
+    return;
+  }
+
+  const [snippet] = await db.select().from(snippetsTable).where(eq(snippetsTable.id, id)).limit(1);
+  if (!snippet) { res.status(404).json({ error: "NOT_FOUND", message: "Snippet tidak ditemukan" }); return; }
+  if (!snippet.isLocked) { res.status(400).json({ error: "NOT_LOCKED", message: "Snippet ini tidak dikunci" }); return; }
+  if (snippet.lockDisabledAt) { res.status(400).json({ error: "ALREADY_DISABLED", message: "Kunci sudah dimatikan sebelumnya" }); return; }
+  if (snippet.authorEmail.toLowerCase() !== authorEmail.trim().toLowerCase()) {
+    res.status(403).json({ error: "WRONG_EMAIL", message: "Email tidak sesuai dengan penulis snippet" });
+    return;
+  }
+
+  // Invalidate old OTPs
+  await db.update(snippetDisableLockOtpsTable)
+    .set({ used: true })
+    .where(and(eq(snippetDisableLockOtpsTable.snippetId, id), eq(snippetDisableLockOtpsTable.used, false)));
+
+  const otp = String(Math.floor(100 + Math.random() * 900)); // 100–999
+  const expiresAt = new Date(Date.now() + 3 * 60 * 1000);
+
+  await db.insert(snippetDisableLockOtpsTable).values({
+    id: crypto.randomUUID(),
+    snippetId: id,
+    authorEmail: snippet.authorEmail,
+    otp,
+    expiresAt,
+    used: false,
+  });
+
+  try {
+    await sendDisableLockOtpEmail(snippet.authorEmail, snippet.title, otp);
+  } catch (e) {
+    logger.error(`[disable-lock] Failed to send OTP email: ${(e as Error).message}`);
+    res.status(500).json({ error: "EMAIL_FAILED", message: "Gagal mengirim email OTP. Coba lagi." });
+    return;
+  }
+
+  res.json({ success: true, message: "OTP telah dikirim ke email penulis" });
+});
+
+router.post("/snippets/:id/disable-lock/verify", async (req, res) => {
+  const { id } = req.params;
+  const { otp } = req.body ?? {};
+
+  if (!otp) { res.status(400).json({ error: "VALIDATION_ERROR", message: "OTP diperlukan" }); return; }
+
+  const [snippet] = await db.select().from(snippetsTable).where(eq(snippetsTable.id, id)).limit(1);
+  if (!snippet) { res.status(404).json({ error: "NOT_FOUND", message: "Snippet tidak ditemukan" }); return; }
+  if (snippet.lockDisabledAt) { res.status(400).json({ error: "ALREADY_DISABLED", message: "Kunci sudah dimatikan sebelumnya" }); return; }
+
+  const [otpRecord] = await db.select()
+    .from(snippetDisableLockOtpsTable)
+    .where(and(eq(snippetDisableLockOtpsTable.snippetId, id), eq(snippetDisableLockOtpsTable.used, false)))
+    .orderBy(desc(snippetDisableLockOtpsTable.createdAt))
+    .limit(1);
+
+  if (!otpRecord) { res.status(400).json({ error: "NO_OTP", message: "Tidak ada OTP aktif. Minta OTP baru." }); return; }
+
+  if (new Date() > otpRecord.expiresAt) {
+    await db.update(snippetDisableLockOtpsTable).set({ used: true }).where(eq(snippetDisableLockOtpsTable.id, otpRecord.id));
+    res.status(400).json({ error: "OTP_EXPIRED", message: "OTP sudah kedaluwarsa. Minta OTP baru." });
+    return;
+  }
+
+  if (otpRecord.otp !== String(otp).trim()) {
+    res.status(400).json({ error: "WRONG_OTP", message: "Kode OTP salah" });
+    return;
+  }
+
+  await db.update(snippetDisableLockOtpsTable).set({ used: true }).where(eq(snippetDisableLockOtpsTable.id, otpRecord.id));
+
+  const now = new Date();
+  const [updated] = await db.update(snippetsTable)
+    .set({ lockDisabledAt: now, updatedAt: now })
+    .where(eq(snippetsTable.id, id))
+    .returning();
+
+  res.json({ success: true, message: "Kunci berhasil dimatikan secara permanen", snippet: formatSnippet(updated) });
 });
 
 // Webhook approve/reject (for Telegram bot)

@@ -149,6 +149,34 @@ export async function sendBroadcastEmail(
   );
 }
 
+export async function sendDisableLockOtpEmail(
+  to: string,
+  snippetTitle: string,
+  otp: string,
+): Promise<void> {
+  const t = getTransporter();
+  await t.sendMail({
+    from: `"Kaai Code Snippet" <${process.env.GMAIL_USER}>`,
+    to,
+    subject: `Kode OTP Matikan Kunci — ${snippetTitle}`,
+    html: `
+      <div style="${BASE_STYLE}">
+        <h2 style="color:#f59e0b;margin-top:0">🔓 Matikan Kunci Snippet</h2>
+        <p>Kamu meminta untuk menonaktifkan kunci pada snippet:</p>
+        <p style="background:#1e2a3a;border:1px solid #2d3f55;border-radius:8px;padding:12px;font-weight:bold;color:#e2e8f0">${snippetTitle}</p>
+        <p>Masukkan kode OTP berikut untuk mengonfirmasi:</p>
+        <div style="background:#1e2a3a;border:2px solid #f59e0b;border-radius:8px;padding:20px;text-align:center;margin:20px 0">
+          <span style="font-size:48px;font-weight:bold;letter-spacing:12px;color:#f59e0b;font-family:monospace">${otp}</span>
+        </div>
+        <p style="color:#ef4444;font-size:13px;font-weight:bold">⚠️ Peringatan: Tindakan ini bersifat permanen dan tidak bisa dibatalkan!</p>
+        <p style="color:#94a3b8;font-size:13px">Kode ini berlaku selama <strong>3 menit</strong> dan hanya bisa digunakan sekali. Jangan bagikan ke siapapun.</p>
+        <p style="color:#94a3b8;font-size:13px">Jika kamu tidak meminta ini, abaikan email ini.</p>
+        ${FOOTER}
+      </div>
+    `,
+  });
+}
+
 export async function sendTestEmail(to: string): Promise<void> {
   const t = getTransporter();
   await t.sendMail({

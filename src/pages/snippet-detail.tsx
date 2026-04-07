@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useParams, Link, useLocation } from "wouter";
 import { format } from "date-fns";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, Copy, Check, Download, Clock, Tag, Code2, AlertTriangle, Share2, Eye, Lock, KeyRound, EyeOff, Loader2 } from "lucide-react";
+import { ArrowLeft, Copy, Check, Download, Clock, Tag, Code2, AlertTriangle, Share2, Eye, Lock, KeyRound, EyeOff, Loader2, LockOpen, ShieldOff } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 
@@ -36,7 +36,7 @@ type FullSnippet = {
   id: string; title: string; description: string; language: string;
   tags: string[]; code: string; authorName: string; status: string;
   viewCount: number; copyCount: number; createdAt: string; updatedAt: string;
-  isLocked?: boolean; lockType?: string | null;
+  isLocked?: boolean; lockType?: string | null; lockDisabledAt?: string | null;
 };
 
 function UnlockModal({
@@ -175,6 +175,142 @@ function UnlockModal({
   );
 }
 
+function DisableLockModal({
+  snippetId,
+  snippetTitle,
+  onDisabled,
+  onClose,
+}: {
+  snippetId: string;
+  snippetTitle: string;
+  onDisabled: () => void;
+  onClose: () => void;
+}) {
+  const { toast } = useToast();
+  const [step, setStep] = useState<"email" | "otp">("email");
+  const [email, setEmail] = useState("");
+  const [otp, setOtp] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleRequestOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    if (!email.trim()) { setError("Masukkan email penulis"); return; }
+    setLoading(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/snippets/${snippetId}/disable-lock/request`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authorEmail: email.trim() }),
+      });
+      const d = await r.json();
+      if (!r.ok) { setError(d.message ?? "Gagal mengirim OTP"); return; }
+      setStep("otp");
+      toast({ title: "OTP Terkirim", description: "Cek email penulis untuk kode OTP 3 angka.", duration: 3000 });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    if (!otp.trim()) { setError("Masukkan kode OTP"); return; }
+    setLoading(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/snippets/${snippetId}/disable-lock/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ otp: otp.trim() }),
+      });
+      const d = await r.json();
+      if (!r.ok) { setError(d.message ?? "OTP salah atau kedaluwarsa"); return; }
+      toast({ title: "Kunci Dimatikan!", description: "Kunci snippet berhasil dimatikan secara permanen.", duration: 3000 });
+      onDisabled();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 8 }}
+        transition={{ duration: 0.18 }}
+        className="glass-card w-full max-w-sm rounded-2xl p-6 shadow-2xl border border-amber-500/20"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-full bg-amber-500/10 border border-amber-500/25 flex items-center justify-center">
+              <ShieldOff className="w-4 h-4 text-amber-400" />
+            </div>
+            <h2 className="font-heading font-bold text-sm text-foreground">Matikan Kunci</h2>
+          </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors text-xs p-1">✕</button>
+        </div>
+
+        <div className="mb-4 rounded-lg bg-red-500/5 border border-red-500/20 p-3 text-xs text-red-400 flex gap-2">
+          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+          <span>Tindakan ini <strong>permanen</strong> dan tidak bisa dibatalkan. Setelah kunci dimatikan, snippet tidak akan bisa dikunci lagi.</span>
+        </div>
+
+        {step === "email" ? (
+          <form onSubmit={handleRequestOtp} className="space-y-3">
+            <div>
+              <p className="text-xs text-muted-foreground mb-2">Masukkan email yang kamu gunakan saat mengupload snippet <strong className="text-foreground">"{snippetTitle}"</strong>:</p>
+              <Input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="email@example.com"
+                className="bg-background/50 text-sm h-9"
+                autoFocus
+                disabled={loading}
+              />
+            </div>
+            {error && <p className="text-xs text-red-400 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{error}</p>}
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" size="sm" className="flex-1 h-8 text-xs" onClick={onClose} disabled={loading}>Batal</Button>
+              <Button type="submit" size="sm" className="flex-1 h-8 text-xs bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 border border-amber-500/20" disabled={loading}>
+                {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><LockOpen className="w-3.5 h-3.5 mr-1" />Kirim OTP</>}
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={handleVerifyOtp} className="space-y-3">
+            <div>
+              <p className="text-xs text-muted-foreground mb-2">OTP 3 angka telah dikirim ke <strong className="text-foreground">{email}</strong>. Masukkan kode tersebut:</p>
+              <Input
+                type="text"
+                inputMode="numeric"
+                maxLength={3}
+                value={otp}
+                onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                placeholder="• • •"
+                className="bg-background/50 text-center text-3xl font-bold tracking-[0.5em] h-14 font-mono"
+                autoFocus
+                disabled={loading}
+              />
+              <p className="text-[10px] text-muted-foreground/60 mt-1.5 text-center">OTP berlaku 3 menit · sekali pakai</p>
+            </div>
+            {error && <p className="text-xs text-red-400 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{error}</p>}
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" size="sm" className="flex-1 h-8 text-xs" onClick={() => { setStep("email"); setOtp(""); setError(""); }} disabled={loading}>Kembali</Button>
+              <Button type="submit" size="sm" className="flex-1 h-8 text-xs bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20" disabled={loading || otp.length !== 3}>
+                {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><ShieldOff className="w-3.5 h-3.5 mr-1" />Matikan Kunci</>}
+              </Button>
+            </div>
+          </form>
+        )}
+      </motion.div>
+    </div>
+  );
+}
+
 export default function SnippetDetail() {
   const params = useParams();
   const id = params.id as string;
@@ -183,6 +319,8 @@ export default function SnippetDetail() {
   const [copied, setCopied] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const [showUnlock, setShowUnlock] = useState(false);
+  const [showDisableLock, setShowDisableLock] = useState(false);
+  const [lockDisabledLocally, setLockDisabledLocally] = useState(false);
   const [unlockedCode, setUnlockedCode] = useState<string | null>(null);
 
   const { data: snippet, isLoading, isError } = useGetSnippet(id, {
@@ -191,8 +329,10 @@ export default function SnippetDetail() {
 
   const s = snippet as unknown as FullSnippet | undefined;
   const isLocked = s?.isLocked ?? false;
-  const hasCode = isLocked ? (unlockedCode !== null) : (!!s?.code);
-  const displayCode = isLocked ? (unlockedCode ?? "") : (s?.code ?? "");
+  const lockIsDisabled = lockDisabledLocally || !!(s?.lockDisabledAt);
+  const hasCode = isLocked && !lockIsDisabled ? (unlockedCode !== null) : (!!s?.code);
+  const effectivelyLocked = isLocked && !lockIsDisabled;
+  const displayCode = effectivelyLocked ? (unlockedCode ?? "") : (s?.code ?? "");
 
   // Try restoring unlock token from sessionStorage
   useEffect(() => {
@@ -224,7 +364,7 @@ export default function SnippetDetail() {
 
   const handleCopy = async () => {
     if (!s) return;
-    if (isLocked && !hasCode) { setShowUnlock(true); return; }
+    if (effectivelyLocked && !hasCode) { setShowUnlock(true); return; }
     await navigator.clipboard.writeText(displayCode);
     setCopied(true);
     fetch(`${API_BASE}/api/snippets/${id}/copy`, { method: "POST" }).catch(() => {});
@@ -233,7 +373,7 @@ export default function SnippetDetail() {
 
   const handleDownload = () => {
     if (!s) return;
-    if (isLocked && !hasCode) { setShowUnlock(true); return; }
+    if (effectivelyLocked && !hasCode) { setShowUnlock(true); return; }
     const ext = LANG_EXTENSIONS[s.language.toLowerCase()] || "txt";
     const filename = `${s.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}.${ext}`;
     const blob = new Blob([displayCode], { type: "text/plain" });
@@ -299,6 +439,14 @@ export default function SnippetDetail() {
             onClose={() => setShowUnlock(false)}
           />
         )}
+        {showDisableLock && (
+          <DisableLockModal
+            snippetId={id}
+            snippetTitle={s.title}
+            onDisabled={() => { setShowDisableLock(false); setLockDisabledLocally(true); }}
+            onClose={() => setShowDisableLock(false)}
+          />
+        )}
       </AnimatePresence>
 
       <motion.div
@@ -321,7 +469,12 @@ export default function SnippetDetail() {
                 <Badge className={cn("px-2 py-0.5 rounded-lg border font-medium text-xs", langConfig.color)}>
                   <Code2 className="w-3 h-3 mr-1" />{langConfig.label}
                 </Badge>
-                {isLocked && (
+                {isLocked && lockIsDisabled && (
+                  <Badge variant="outline" className="text-xs border gap-1 bg-slate-500/10 text-slate-400 border-slate-500/30">
+                    <LockOpen className="w-2.5 h-2.5" /> Kunci Dimatikan
+                  </Badge>
+                )}
+                {effectivelyLocked && (
                   <Badge variant="outline" className={cn("text-xs border gap-1", hasCode
                     ? "bg-green-500/10 text-green-400 border-green-500/30"
                     : "bg-amber-500/10 text-amber-400 border-amber-500/30"
@@ -372,7 +525,7 @@ export default function SnippetDetail() {
         </div>
 
         {/* Code block or lock placeholder */}
-        {isLocked && !hasCode ? (
+        {effectivelyLocked && !hasCode ? (
           <motion.div
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
@@ -387,9 +540,18 @@ export default function SnippetDetail() {
                 Snippet ini dilindungi dengan {s.lockType === "pin" ? "PIN" : "password"}.
               </p>
             </div>
-            <Button onClick={() => setShowUnlock(true)} className="gap-2">
-              <KeyRound className="w-4 h-4" /> Buka Kunci
-            </Button>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <Button onClick={() => setShowUnlock(true)} className="gap-2">
+                <KeyRound className="w-4 h-4" /> Buka Kunci
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setShowDisableLock(true)}
+                className="gap-2 border-amber-500/30 text-amber-400 hover:bg-amber-500/10 hover:text-amber-300"
+              >
+                <ShieldOff className="w-4 h-4" /> Matikan Kunci
+              </Button>
+            </div>
           </motion.div>
         ) : (
           <div className="rounded-xl border border-border/40 overflow-hidden bg-[#1e1e1e] shadow-xl">
@@ -402,7 +564,7 @@ export default function SnippetDetail() {
                   <div className="w-3 h-3 rounded-full bg-[#28c840]" />
                 </div>
                 <span className="text-xs font-mono text-[#858585] ml-1 select-none truncate max-w-[140px] sm:max-w-none">{filename}</span>
-                {isLocked && hasCode && (
+                {effectivelyLocked && hasCode && (
                   <span className="text-[10px] text-green-400 flex items-center gap-0.5 ml-2">
                     <Check className="w-2.5 h-2.5" /> Terbuka
                   </span>
@@ -443,6 +605,15 @@ export default function SnippetDetail() {
                 >
                   <Download className="w-3 h-3" /><span className="hidden xs:inline">Download</span>
                 </button>
+                {effectivelyLocked && hasCode && (
+                  <button
+                    onClick={() => setShowDisableLock(true)}
+                    className="h-7 px-2 sm:px-2.5 text-xs text-amber-500/70 hover:text-amber-400 hover:bg-amber-500/5 rounded transition-colors flex items-center gap-1 flex-shrink-0 border border-amber-500/20"
+                    title="Matikan kunci secara permanen"
+                  >
+                    <ShieldOff className="w-3 h-3" /><span className="hidden sm:inline">Matikan Kunci</span>
+                  </button>
+                )}
               </div>
             </div>
 

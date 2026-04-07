@@ -34,6 +34,7 @@ export const snippetsTable = pgTable("snippets", {
   lockType: text("lock_type"),
   lockHash: text("lock_hash"),
   lockSalt: text("lock_salt"),
+  lockDisabledAt: timestamp("lock_disabled_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -168,6 +169,16 @@ export const snippetLockAttemptsTable = pgTable("snippet_lock_attempts", {
   attemptCount: integer("attempt_count").notNull().default(0),
   lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }).notNull().defaultNow(),
   bannedUntil: timestamp("banned_until", { withTimezone: true }),
+});
+
+export const snippetDisableLockOtpsTable = pgTable("snippet_disable_lock_otps", {
+  id: text("id").primaryKey(),
+  snippetId: text("snippet_id").notNull(),
+  authorEmail: text("author_email").notNull(),
+  otp: text("otp").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  used: boolean("used").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 // ─── Types ────────────────────────────────────────────────────────────────────

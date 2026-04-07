@@ -372,7 +372,7 @@ router.get("/admin/auth/me", async (req: Request, res: Response) => {
 // SNIPPET MANAGEMENT
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SUPERADMIN_EMAIL = "khaliqarrasyidabdul@gmail.com";
+const SUPERADMIN_EMAIL = "akaanakbaik17@proton.me";
 
 function formatSnippetForAdmin(s: typeof snippetsTable.$inferSelect, adminEmail: string) {
   const isSuperAdmin = adminEmail === SUPERADMIN_EMAIL;
