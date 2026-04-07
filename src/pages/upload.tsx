@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { useLocation } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { motion } from "framer-motion";
-import { Upload as UploadIcon, CheckCircle2, Code2, AlertCircle, Send } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Upload as UploadIcon, CheckCircle2, Code2, AlertCircle, Send, ChevronDown, Search, X } from "lucide-react";
 
 import { useCreateSnippet, getListSnippetsQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -21,14 +22,8 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { LANGUAGE_CONFIG } from "@/lib/constants";
+import { cn } from "@/lib/utils";
 
 const formSchema = z.object({
   title: z.string().min(1, "Judul wajib diisi").max(200, "Judul terlalu panjang"),
@@ -39,6 +34,164 @@ const formSchema = z.object({
   authorName: z.string().min(1, "Nama author wajib diisi"),
   authorEmail: z.string().email("Format email tidak valid"),
 });
+
+function LanguagePicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (lang: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [dropPos, setDropPos] = useState({ top: 0, left: 0, width: 0, openUp: false });
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dropRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  const langs = Object.entries(LANGUAGE_CONFIG);
+  const filtered = query
+    ? langs.filter(([key, cfg]) =>
+        cfg.label.toLowerCase().includes(query.toLowerCase()) ||
+        key.toLowerCase().includes(query.toLowerCase())
+      )
+    : langs;
+
+  const selected = LANGUAGE_CONFIG[value];
+
+  const calcPos = useCallback(() => {
+    if (!triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const dropH = 248; // ~50px search + 5×36px items + padding
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const openUp = spaceBelow < dropH && rect.top > dropH;
+    setDropPos({
+      top: openUp ? rect.top - dropH - 4 : rect.bottom + 4,
+      left: rect.left,
+      width: rect.width,
+      openUp,
+    });
+  }, []);
+
+  const handleOpen = () => {
+    if (!open) {
+      calcPos();
+      setOpen(true);
+      setTimeout(() => searchRef.current?.focus(), 50);
+    } else {
+      setOpen(false);
+      setQuery("");
+    }
+  };
+
+  // Close on outside click, scroll, or resize
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => {
+      const target = e.target as Node;
+      if (
+        triggerRef.current?.contains(target) ||
+        dropRef.current?.contains(target)
+      ) return;
+      setOpen(false);
+      setQuery("");
+    };
+    const onScroll = () => { calcPos(); };
+    document.addEventListener("mousedown", close);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", calcPos);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", calcPos);
+    };
+  }, [open, calcPos]);
+
+  const dropdown = open ? (
+    <div
+      ref={dropRef}
+      style={{
+        position: "fixed",
+        top: dropPos.top,
+        left: dropPos.left,
+        width: dropPos.width,
+        zIndex: 9999,
+      }}
+      className="bg-card border border-border/60 rounded-xl shadow-2xl overflow-hidden"
+    >
+      {/* Search bar */}
+      <div className="p-2 border-b border-border/40">
+        <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-background/60">
+          <Search className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+          <input
+            ref={searchRef}
+            placeholder="Cari bahasa..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="flex-1 text-sm bg-transparent outline-none placeholder:text-muted-foreground text-foreground"
+          />
+          {query && (
+            <button type="button" onClick={() => setQuery("")} className="text-muted-foreground hover:text-foreground">
+              <X className="w-3 h-3" />
+            </button>
+          )}
+        </div>
+      </div>
+      {/* List: max 5 items visible = 5 × ~36px = 180px */}
+      <div className="overflow-y-auto py-1" style={{ maxHeight: "180px" }}>
+        {filtered.length === 0 ? (
+          <div className="px-4 py-3 text-xs text-muted-foreground text-center">Tidak ditemukan</div>
+        ) : (
+          filtered.map(([key, cfg]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => { onChange(key); setOpen(false); setQuery(""); }}
+              className={cn(
+                "w-full px-4 py-2 text-left text-sm flex items-center gap-2.5 transition-colors hover:bg-white/5",
+                value === key && "text-blue-400 bg-blue-500/[0.08]",
+              )}
+            >
+              <span className={cn("w-2 h-2 rounded-full flex-shrink-0", cfg.color.split(" ")[0])} />
+              {cfg.label}
+              {value === key && <span className="ml-auto text-[10px] text-blue-400 opacity-70">✓</span>}
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  ) : null;
+
+  return (
+    <div className="relative">
+      <button
+        ref={triggerRef}
+        type="button"
+        data-testid="select-language"
+        onClick={handleOpen}
+        className={cn(
+          "w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg border text-sm transition-all",
+          "bg-background/50 border-border/60 hover:border-border focus:outline-none focus:ring-1 focus:ring-primary/50",
+          open && "border-primary/50 ring-1 ring-primary/30",
+        )}
+      >
+        <span className="flex items-center gap-2 min-w-0 overflow-hidden">
+          {selected ? (
+            <>
+              <span className={cn("w-2 h-2 rounded-full flex-shrink-0", selected.color.split(" ")[0])} />
+              <span className="text-foreground truncate">{selected.label}</span>
+            </>
+          ) : (
+            <span className="text-muted-foreground truncate">Pilih bahasa...</span>
+          )}
+        </span>
+        <ChevronDown className={cn("w-3.5 h-3.5 text-muted-foreground flex-shrink-0 transition-transform", open && "rotate-180")} />
+      </button>
+
+      {typeof document !== "undefined" && createPortal(dropdown, document.body)}
+    </div>
+  );
+}
 
 export default function Upload() {
   const [, setLocation] = useLocation();
@@ -205,18 +358,9 @@ export default function Upload() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>Bahasa</FormLabel>
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
-                          <FormControl>
-                            <SelectTrigger className="bg-background/50" data-testid="select-language">
-                              <SelectValue placeholder="Pilih bahasa" />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            {Object.entries(LANGUAGE_CONFIG).map(([val, config]) => (
-                              <SelectItem key={val} value={val}>{config.label}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        <FormControl>
+                          <LanguagePicker value={field.value} onChange={field.onChange} />
+                        </FormControl>
                         <FormMessage />
                       </FormItem>
                     )}
