@@ -948,49 +948,61 @@ var ALLOWED_ADMIN_EMAILS = [
   "kelvdra46@gmail.com",
   "clpmadang@gmail.com"
 ];
-var EMAIL_BAN_DURATION_MS = 5 * 60 * 1e3;
-var IP_BAN_DURATION_MS = 24 * 60 * 60 * 1e3;
 var SESSION_DURATION_MS = 24 * 60 * 60 * 1e3;
 var OTP_DURATION_MS = 5 * 60 * 1e3;
+var EMAIL_BAN_DURATION_MS = 10 * 60 * 1e3;
+var IP_BAN_DURATION_MS = 24 * 60 * 60 * 1e3;
 var MAX_FAILED_ATTEMPTS_BEFORE_BAN = 5;
+var SESSION_COOKIE = "admin_session";
+function getSessionCookie(req) {
+  return req.signedCookies?.[SESSION_COOKIE] ?? req.cookies?.[SESSION_COOKIE];
+}
+function setSessionCookie(res, sessionId, expiresAt) {
+  res.cookie(SESSION_COOKIE, sessionId, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    signed: !!process.env.SESSION_SECRET,
+    expires: expiresAt,
+    path: "/"
+  });
+}
 function generateOtp() {
-  return String(1e5 + import_node_crypto2.default.randomInt(9e5));
+  return String(1e4 + import_node_crypto2.default.randomInt(9e4));
 }
 function sanitizeEmail(email) {
   return email.toLowerCase().trim().replace(/[^a-z0-9@._+-]/g, "");
 }
+async function getSession(req) {
+  const token = getSessionCookie(req);
+  if (!token) return null;
+  try {
+    const [session] = await db.select().from(adminSessionsTable).where((0, import_drizzle_orm5.and)((0, import_drizzle_orm5.eq)(adminSessionsTable.id, token), (0, import_drizzle_orm5.gt)(adminSessionsTable.expiresAt, /* @__PURE__ */ new Date()))).limit(1);
+    return session ?? null;
+  } catch {
+    return null;
+  }
+}
 async function requireAdminSession(req, res, next) {
-  const token = req.cookies?.["admin_session"];
-  if (!token) {
+  const session = await getSession(req);
+  if (!session) {
+    res.clearCookie(SESSION_COOKIE, { path: "/" });
     res.status(401).json({ error: "UNAUTHORIZED", message: "Not authenticated" });
     return;
   }
+  req.adminEmail = session.email;
   try {
-    const [session] = await db.select().from(adminSessionsTable).where((0, import_drizzle_orm5.and)((0, import_drizzle_orm5.eq)(adminSessionsTable.id, token), (0, import_drizzle_orm5.gt)(adminSessionsTable.expiresAt, /* @__PURE__ */ new Date()))).limit(1);
-    if (!session) {
-      res.clearCookie("admin_session", { path: "/" });
-      res.status(401).json({ error: "UNAUTHORIZED", message: "Session expired or invalid" });
-      return;
-    }
-    req.adminEmail = session.email;
-    try {
-      await next(req, res);
-    } catch (err) {
-      logger.error(`[admin] Route handler error: ${err.message}`);
-      if (!res.headersSent) {
-        res.status(500).json({ error: "SERVER_ERROR", message: "Internal server error" });
-      }
-    }
+    await next(req, res);
   } catch (err) {
-    logger.error(`[admin] Session check failed: ${err.message}`);
-    res.status(500).json({ error: "SERVER_ERROR", message: "Session check failed" });
+    logger.error(`[admin] Route error: ${err.message}`);
+    if (!res.headersSent) res.status(500).json({ error: "SERVER_ERROR", message: "Internal server error" });
   }
 }
 async function checkIpBan(ip) {
   try {
-    const [ipBan] = await db.select().from(ipBansTable).where((0, import_drizzle_orm5.eq)(ipBansTable.ipAddress, ip)).limit(1);
-    if (ipBan && ipBan.bannedUntil > /* @__PURE__ */ new Date()) {
-      const min = Math.ceil((ipBan.bannedUntil.getTime() - Date.now()) / 6e4);
+    const [ban] = await db.select().from(ipBansTable).where((0, import_drizzle_orm5.eq)(ipBansTable.ipAddress, ip)).limit(1);
+    if (ban && ban.bannedUntil > /* @__PURE__ */ new Date()) {
+      const min = Math.ceil((ban.bannedUntil.getTime() - Date.now()) / 6e4);
       return `IP anda diblokir selama ${min} menit lagi karena terlalu banyak percobaan masuk.`;
     }
   } catch {
@@ -999,16 +1011,52 @@ async function checkIpBan(ip) {
 }
 async function checkEmailBan(email) {
   try {
-    const [emailBan] = await db.select().from(emailBansTable).where((0, import_drizzle_orm5.eq)(emailBansTable.email, email)).limit(1);
-    if (emailBan && emailBan.bannedUntil > /* @__PURE__ */ new Date()) {
-      const min = Math.ceil((emailBan.bannedUntil.getTime() - Date.now()) / 6e4);
+    const [ban] = await db.select().from(emailBansTable).where((0, import_drizzle_orm5.eq)(emailBansTable.email, email)).limit(1);
+    if (ban && ban.bannedUntil > /* @__PURE__ */ new Date()) {
+      const min = Math.ceil((ban.bannedUntil.getTime() - Date.now()) / 6e4);
       return `Email anda diblokir selama ${min} menit lagi. Coba lagi nanti.`;
     }
   } catch {
   }
   return null;
 }
-router4.post("/admin/auth/request-otp", adminLoginRateLimit, async (req, res) => {
+async function recordFailedAttempt(ip, email) {
+  try {
+    const [existing] = await db.select().from(loginAttemptsTable).where((0, import_drizzle_orm5.eq)(loginAttemptsTable.ipAddress, ip)).limit(1);
+    const count3 = (existing?.attemptCount ?? 0) + 1;
+    if (existing) {
+      await db.update(loginAttemptsTable).set({ attemptCount: count3, lastAttemptAt: /* @__PURE__ */ new Date() }).where((0, import_drizzle_orm5.eq)(loginAttemptsTable.id, existing.id));
+    } else {
+      await db.insert(loginAttemptsTable).values({ id: import_node_crypto2.default.randomUUID(), ipAddress: ip, email, attemptCount: count3, lastAttemptAt: /* @__PURE__ */ new Date() });
+    }
+    if (count3 >= MAX_FAILED_ATTEMPTS_BEFORE_BAN) {
+      const bannedUntil = new Date(Date.now() + IP_BAN_DURATION_MS);
+      await db.insert(ipBansTable).values({ id: import_node_crypto2.default.randomUUID(), ipAddress: ip, bannedUntil, reason: "Too many failed login attempts", createdAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: ipBansTable.ipAddress, set: { bannedUntil } });
+      const emailBannedUntil = new Date(Date.now() + EMAIL_BAN_DURATION_MS);
+      await db.insert(emailBansTable).values({ id: import_node_crypto2.default.randomUUID(), email, bannedUntil: emailBannedUntil, reason: "Too many failed login attempts", createdAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: emailBansTable.email, set: { bannedUntil: emailBannedUntil } });
+    }
+  } catch {
+  }
+}
+async function resetFailedAttempts(ip, email) {
+  try {
+    await Promise.all([
+      db.delete(loginAttemptsTable).where((0, import_drizzle_orm5.eq)(loginAttemptsTable.ipAddress, ip)),
+      db.delete(ipBansTable).where((0, import_drizzle_orm5.eq)(ipBansTable.ipAddress, ip)),
+      db.delete(emailBansTable).where((0, import_drizzle_orm5.eq)(emailBansTable.email, email))
+    ]);
+  } catch {
+  }
+}
+router4.get("/admin/session", async (req, res) => {
+  const session = await getSession(req);
+  if (!session) {
+    res.status(401).json({ authenticated: false });
+    return;
+  }
+  res.json({ authenticated: true, email: session.email, expiresAt: session.expiresAt.toISOString() });
+});
+async function handleRequestOtp(req, res) {
   const raw = req.body?.email;
   if (!raw || typeof raw !== "string") {
     res.status(400).json({ error: "VALIDATION_ERROR", message: "Email is required" });
@@ -1045,15 +1093,15 @@ router4.post("/admin/auth/request-otp", adminLoginRateLimit, async (req, res) =>
   });
   try {
     await sendOtpEmail(email, otp);
-    logger.info(`[admin] OTP sent to ${email}`);
+    logger.info(`[admin] OTP (5-digit) sent to ${email} from IP ${ip}`);
   } catch (err) {
     logger.error(`[admin] Failed to send OTP to ${email}: ${err.message}`);
     res.status(500).json({ error: "MAIL_ERROR", message: "Gagal mengirim OTP. Coba lagi." });
     return;
   }
   res.json({ success: true, message: "OTP dikirim ke email kamu." });
-});
-router4.post("/admin/auth/verify-otp", adminLoginRateLimit, async (req, res) => {
+}
+async function handleVerifyOtp(req, res) {
   const raw = req.body?.email;
   const otpInput = req.body?.otp;
   if (!raw || !otpInput) {
@@ -1095,77 +1143,49 @@ router4.post("/admin/auth/verify-otp", adminLoginRateLimit, async (req, res) => 
       expiresAt,
       createdAt: /* @__PURE__ */ new Date()
     });
-    res.cookie("admin_session", sessionId, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      expires: expiresAt,
-      path: "/"
-    });
+    setSessionCookie(res, sessionId, expiresAt);
+    logger.info(`[admin] Login successful: ${email} from IP ${ip}`);
     res.json({ success: true, email });
   } catch (err) {
     logger.error(`[admin] OTP verify failed: ${err.message}`);
     res.status(500).json({ error: "SERVER_ERROR", message: "Gagal verifikasi OTP" });
   }
-});
-router4.post("/admin/auth/logout", async (req, res) => {
-  const token = req.cookies?.["admin_session"];
-  if (token) {
-    await db.delete(adminSessionsTable).where((0, import_drizzle_orm5.eq)(adminSessionsTable.id, token)).catch(() => {
-    });
-  }
-  res.clearCookie("admin_session", { path: "/" });
+}
+router4.post("/admin/login", adminLoginRateLimit, handleRequestOtp);
+router4.post("/admin/verify", adminLoginRateLimit, handleVerifyOtp);
+router4.post("/admin/auth/request-otp", adminLoginRateLimit, handleRequestOtp);
+router4.post("/admin/auth/verify-otp", adminLoginRateLimit, handleVerifyOtp);
+async function handleLogout(req, res) {
+  const token = getSessionCookie(req);
+  if (token) await db.delete(adminSessionsTable).where((0, import_drizzle_orm5.eq)(adminSessionsTable.id, token)).catch(() => {
+  });
+  res.clearCookie(SESSION_COOKIE, { path: "/" });
   res.json({ success: true });
-});
+}
+router4.post("/admin/logout", handleLogout);
+router4.post("/admin/auth/logout", handleLogout);
 router4.get("/admin/auth/me", async (req, res) => {
-  const token = req.cookies?.["admin_session"];
-  if (!token) {
+  const session = await getSession(req);
+  if (!session) {
     res.status(401).json({ error: "UNAUTHORIZED" });
     return;
   }
-  try {
-    const [session] = await db.select().from(adminSessionsTable).where((0, import_drizzle_orm5.and)((0, import_drizzle_orm5.eq)(adminSessionsTable.id, token), (0, import_drizzle_orm5.gt)(adminSessionsTable.expiresAt, /* @__PURE__ */ new Date()))).limit(1);
-    if (!session) {
-      res.status(401).json({ error: "UNAUTHORIZED" });
-      return;
-    }
-    res.json({ email: session.email, expiresAt: session.expiresAt.toISOString() });
-  } catch {
-    res.status(500).json({ error: "SERVER_ERROR" });
-  }
+  res.json({ email: session.email, expiresAt: session.expiresAt.toISOString() });
 });
-async function recordFailedAttempt(ip, email) {
-  try {
-    const [existing] = await db.select().from(loginAttemptsTable).where((0, import_drizzle_orm5.eq)(loginAttemptsTable.ipAddress, ip)).limit(1);
-    const count3 = (existing?.attemptCount ?? 0) + 1;
-    if (existing) {
-      await db.update(loginAttemptsTable).set({ attemptCount: count3, lastAttemptAt: /* @__PURE__ */ new Date() }).where((0, import_drizzle_orm5.eq)(loginAttemptsTable.id, existing.id));
-    } else {
-      await db.insert(loginAttemptsTable).values({ id: import_node_crypto2.default.randomUUID(), ipAddress: ip, email, attemptCount: count3, lastAttemptAt: /* @__PURE__ */ new Date() });
+router4.get("/admin/pending", async (req, res) => {
+  await requireAdminSession(req, res, async (_req, res2) => {
+    try {
+      const snippets = await db.select().from(snippetsTable).where((0, import_drizzle_orm5.eq)(snippetsTable.status, "pending")).orderBy((0, import_drizzle_orm5.desc)(snippetsTable.createdAt)).limit(100);
+      res2.json({ data: snippets.map((s) => ({ ...s, tags: s.tags ?? [], createdAt: s.createdAt.toISOString(), updatedAt: s.updatedAt.toISOString() })) });
+    } catch {
+      res2.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch pending snippets" });
     }
-    if (count3 >= MAX_FAILED_ATTEMPTS_BEFORE_BAN) {
-      const bannedUntil = new Date(Date.now() + IP_BAN_DURATION_MS);
-      await db.insert(ipBansTable).values({ id: import_node_crypto2.default.randomUUID(), ipAddress: ip, bannedUntil, reason: "Too many failed login attempts", createdAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: ipBansTable.ipAddress, set: { bannedUntil } });
-      const emailBannedUntil = new Date(Date.now() + EMAIL_BAN_DURATION_MS);
-      await db.insert(emailBansTable).values({ id: import_node_crypto2.default.randomUUID(), email, bannedUntil: emailBannedUntil, reason: "Too many failed login attempts", createdAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: emailBansTable.email, set: { bannedUntil: emailBannedUntil } });
-    }
-  } catch {
-  }
-}
-async function resetFailedAttempts(ip, email) {
-  try {
-    await Promise.all([
-      db.delete(loginAttemptsTable).where((0, import_drizzle_orm5.eq)(loginAttemptsTable.ipAddress, ip)),
-      db.delete(ipBansTable).where((0, import_drizzle_orm5.eq)(ipBansTable.ipAddress, ip)),
-      db.delete(emailBansTable).where((0, import_drizzle_orm5.eq)(emailBansTable.email, email))
-    ]);
-  } catch {
-  }
-}
-router4.get("/admin/snippets", async (req, res) => {
+  });
+});
+router4.get("/admin/all-snippets", async (req, res) => {
   await requireAdminSession(req, res, async (req2, res2) => {
     const status = req2.query.status;
-    const limit = Math.min(Number(req2.query.limit) || 20, 100);
+    const limit = Math.min(Number(req2.query.limit) || 50, 200);
     const page = Math.max(Number(req2.query.page) || 1, 1);
     const offset = (page - 1) * limit;
     try {
@@ -1175,42 +1195,88 @@ router4.get("/admin/snippets", async (req, res) => {
         db.select({ total: (0, import_drizzle_orm5.sum)(snippetsTable.id) }).from(snippetsTable).where(where)
       ]);
       res2.json({
-        data: snippets.map((s) => ({
-          ...s,
-          tags: s.tags ?? [],
-          createdAt: s.createdAt.toISOString(),
-          updatedAt: s.updatedAt.toISOString()
-        })),
+        data: snippets.map((s) => ({ ...s, tags: s.tags ?? [], createdAt: s.createdAt.toISOString(), updatedAt: s.updatedAt.toISOString() })),
         pagination: { page, limit, total: Number(total ?? 0), totalPages: Math.ceil(Number(total ?? 0) / limit) }
       });
-    } catch (err) {
+    } catch {
       res2.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch snippets" });
+    }
+  });
+});
+router4.get("/admin/snippets", async (req, res) => {
+  await requireAdminSession(req, res, async (req2, res2) => {
+    const status = req2.query.status;
+    const limit = Math.min(Number(req2.query.limit) || 50, 200);
+    const page = Math.max(Number(req2.query.page) || 1, 1);
+    const offset = (page - 1) * limit;
+    try {
+      const where = status ? (0, import_drizzle_orm5.eq)(snippetsTable.status, status) : void 0;
+      const [snippets, [{ total }]] = await Promise.all([
+        db.select().from(snippetsTable).where(where).orderBy((0, import_drizzle_orm5.desc)(snippetsTable.createdAt)).limit(limit).offset(offset),
+        db.select({ total: (0, import_drizzle_orm5.sum)(snippetsTable.id) }).from(snippetsTable).where(where)
+      ]);
+      res2.json({
+        data: snippets.map((s) => ({ ...s, tags: s.tags ?? [], createdAt: s.createdAt.toISOString(), updatedAt: s.updatedAt.toISOString() })),
+        pagination: { page, limit, total: Number(total ?? 0), totalPages: Math.ceil(Number(total ?? 0) / limit) }
+      });
+    } catch {
+      res2.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch snippets" });
+    }
+  });
+});
+router4.post("/admin/snippets/:id/approve", async (req, res) => {
+  await requireAdminSession(req, res, async (req2, res2) => {
+    try {
+      const [snippet] = await db.select().from(snippetsTable).where((0, import_drizzle_orm5.eq)(snippetsTable.id, req2.params.id)).limit(1);
+      if (!snippet) {
+        res2.status(404).json({ error: "NOT_FOUND" });
+        return;
+      }
+      const [updated] = await db.update(snippetsTable).set({ status: "approved", rejectReason: null, updatedAt: /* @__PURE__ */ new Date() }).where((0, import_drizzle_orm5.eq)(snippetsTable.id, req2.params.id)).returning();
+      sendApprovalEmail(snippet.authorEmail, snippet.title, snippet.id).catch(() => {
+      });
+      res2.json({ ...updated, tags: updated.tags ?? [], createdAt: updated.createdAt.toISOString(), updatedAt: updated.updatedAt.toISOString() });
+    } catch {
+      res2.status(500).json({ error: "SERVER_ERROR", message: "Failed to approve snippet" });
+    }
+  });
+});
+router4.post("/admin/snippets/:id/reject", async (req, res) => {
+  await requireAdminSession(req, res, async (req2, res2) => {
+    const { reason } = req2.body;
+    try {
+      const [snippet] = await db.select().from(snippetsTable).where((0, import_drizzle_orm5.eq)(snippetsTable.id, req2.params.id)).limit(1);
+      if (!snippet) {
+        res2.status(404).json({ error: "NOT_FOUND" });
+        return;
+      }
+      const [updated] = await db.update(snippetsTable).set({ status: "rejected", rejectReason: reason ?? null, updatedAt: /* @__PURE__ */ new Date() }).where((0, import_drizzle_orm5.eq)(snippetsTable.id, req2.params.id)).returning();
+      sendRejectionEmail(snippet.authorEmail, snippet.title, reason).catch(() => {
+      });
+      res2.json({ ...updated, tags: updated.tags ?? [], createdAt: updated.createdAt.toISOString(), updatedAt: updated.updatedAt.toISOString() });
+    } catch {
+      res2.status(500).json({ error: "SERVER_ERROR", message: "Failed to reject snippet" });
     }
   });
 });
 router4.patch("/admin/snippets/:id", async (req, res) => {
   await requireAdminSession(req, res, async (req2, res2) => {
-    const { id } = req2.params;
     const { status, rejectReason } = req2.body;
-    const adminEmail = req2.adminEmail;
     if (!["approved", "rejected", "pending"].includes(status)) {
       res2.status(400).json({ error: "VALIDATION_ERROR", message: "Invalid status" });
       return;
     }
     try {
-      const [snippet] = await db.select().from(snippetsTable).where((0, import_drizzle_orm5.eq)(snippetsTable.id, id)).limit(1);
+      const [snippet] = await db.select().from(snippetsTable).where((0, import_drizzle_orm5.eq)(snippetsTable.id, req2.params.id)).limit(1);
       if (!snippet) {
         res2.status(404).json({ error: "NOT_FOUND" });
         return;
       }
-      const [updated] = await db.update(snippetsTable).set({ status, rejectReason: status === "rejected" ? rejectReason ?? null : null, updatedAt: /* @__PURE__ */ new Date() }).where((0, import_drizzle_orm5.eq)(snippetsTable.id, id)).returning();
-      if (status === "approved") {
-        sendApprovalEmail(snippet.authorEmail, snippet.title, snippet.id).catch(() => {
-        });
-      } else if (status === "rejected") {
-        sendRejectionEmail(snippet.authorEmail, snippet.title, rejectReason).catch(() => {
-        });
-      }
+      const [updated] = await db.update(snippetsTable).set({ status, rejectReason: status === "rejected" ? rejectReason ?? null : null, updatedAt: /* @__PURE__ */ new Date() }).where((0, import_drizzle_orm5.eq)(snippetsTable.id, req2.params.id)).returning();
+      if (status === "approved") sendApprovalEmail(snippet.authorEmail, snippet.title, snippet.id).catch(() => {
+      });
+      else if (status === "rejected") sendRejectionEmail(snippet.authorEmail, snippet.title, rejectReason).catch(() => {
+      });
       res2.json({ ...updated, tags: updated.tags ?? [], createdAt: updated.createdAt.toISOString(), updatedAt: updated.updatedAt.toISOString() });
     } catch {
       res2.status(500).json({ error: "SERVER_ERROR", message: "Failed to update snippet" });
@@ -1227,74 +1293,26 @@ router4.delete("/admin/snippets/:id", async (req, res) => {
     }
   });
 });
-router4.post("/admin/broadcast", async (req, res) => {
+router4.post("/admin/ban-email", async (req, res) => {
   await requireAdminSession(req, res, async (req2, res2) => {
-    const { subject, message, targetEmail } = req2.body;
-    const adminEmail = req2.adminEmail;
-    if (!subject || !message) {
-      res2.status(400).json({ error: "VALIDATION_ERROR", message: "subject and message required" });
+    const { email, reason, durationMs } = req2.body;
+    if (!email) {
+      res2.status(400).json({ error: "VALIDATION_ERROR", message: "Email required" });
       return;
     }
+    const sanitized = sanitizeEmail(email);
+    const bannedUntil = new Date(Date.now() + (durationMs ?? 365 * 24 * 60 * 60 * 1e3));
     try {
-      let recipients;
-      if (targetEmail) {
-        recipients = [targetEmail];
-      } else {
-        const authors = await db.selectDistinct({ email: snippetsTable.authorEmail }).from(snippetsTable);
-        recipients = authors.map((a) => a.authorEmail).filter(Boolean);
-      }
-      if (recipients.length === 0) {
-        res2.status(400).json({ error: "NO_RECIPIENTS", message: "Tidak ada penerima." });
-        return;
-      }
-      await sendBroadcastEmail(recipients, subject, message);
-      await db.insert(broadcastLogsTable).values({
-        id: import_node_crypto2.default.randomUUID(),
-        adminEmail,
-        adminInitial: adminEmail[0]?.toUpperCase() ?? "A",
-        targetEmail: targetEmail ?? null,
-        subject,
-        message,
-        recipientCount: recipients.length,
-        createdAt: /* @__PURE__ */ new Date()
-      }).catch(() => {
-      });
-      res2.json({ success: true, recipientCount: recipients.length });
-    } catch (err) {
-      const msg = err.message;
-      logger.error(`[admin] Broadcast failed: ${msg}`);
-      if (msg.includes("GMAIL_USER") || msg.includes("GMAIL_PASS")) {
-        res2.status(500).json({ error: "MAIL_CONFIG_ERROR", message: "SMTP credentials not configured." });
-      } else {
-        res2.status(500).json({ error: "MAIL_ERROR", message: "Failed to send broadcast." });
-      }
-    }
-  });
-});
-router4.post("/admin/test-email", async (req, res) => {
-  await requireAdminSession(req, res, async (req2, res2) => {
-    const adminEmail = req2.adminEmail;
-    try {
-      await sendTestEmail(adminEmail);
-      res2.json({ success: true });
-    } catch (err) {
-      res2.status(500).json({ error: "MAIL_ERROR", message: err.message });
-    }
-  });
-});
-router4.get("/admin/broadcast-logs", async (req, res) => {
-  await requireAdminSession(req, res, async (req2, res2) => {
-    const limit = Math.min(Number(req2.query.limit) || 50, 200);
-    try {
-      const logs = await db.select().from(broadcastLogsTable).orderBy((0, import_drizzle_orm5.desc)(broadcastLogsTable.createdAt)).limit(limit);
-      res2.json({ data: logs.map((l) => ({ ...l, createdAt: l.createdAt.toISOString() })) });
+      await db.insert(emailBansTable).values({ id: import_node_crypto2.default.randomUUID(), email: sanitized, bannedUntil, reason: reason ?? "Diblokir oleh admin", createdAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: emailBansTable.email, set: { bannedUntil, reason: reason ?? "Diblokir oleh admin" } });
+      logger.info(`[admin] Email banned: ${sanitized}`);
+      res2.json({ success: true, message: `Email ${sanitized} telah diblokir.` });
     } catch {
-      res2.status(500).json({ error: "SERVER_ERROR" });
+      res2.status(500).json({ error: "SERVER_ERROR", message: "Gagal memblokir email" });
     }
   });
 });
 router4.get("/admin/security/bans", async (req, res) => {
-  await requireAdminSession(req, res, async (req2, res2) => {
+  await requireAdminSession(req, res, async (_req, res2) => {
     try {
       const [ipBans, emailBans] = await Promise.all([
         db.select().from(ipBansTable).orderBy((0, import_drizzle_orm5.desc)(ipBansTable.createdAt)),
@@ -1323,33 +1341,113 @@ router4.delete("/admin/security/bans/email/:id", async (req, res) => {
     res2.json({ success: true });
   });
 });
-router4.get("/admin/api-keys", async (req, res) => {
-  await requireAdminSession(req, res, (req2, res2) => listApiKeys(req2, res2));
+async function handleBroadcast(req, res, targetEmail) {
+  const { subject, message, adminInitial } = req.body;
+  const adminEmail = req.adminEmail;
+  if (!subject || !message) {
+    res.status(400).json({ error: "VALIDATION_ERROR", message: "subject and message required" });
+    return;
+  }
+  let recipients;
+  if (targetEmail) {
+    recipients = [targetEmail];
+  } else {
+    const authors = await db.selectDistinct({ email: snippetsTable.authorEmail }).from(snippetsTable);
+    recipients = authors.map((a) => a.authorEmail).filter(Boolean);
+  }
+  if (recipients.length === 0) {
+    res.status(400).json({ error: "NO_RECIPIENTS", message: "Tidak ada penerima." });
+    return;
+  }
+  let sent = 0;
+  let failed = 0;
+  await Promise.allSettled(
+    recipients.map((r) => sendBroadcastEmail(r, subject, message).then(() => {
+      sent++;
+    }).catch(() => {
+      failed++;
+    }))
+  );
+  await db.insert(broadcastLogsTable).values({
+    id: import_node_crypto2.default.randomUUID(),
+    adminEmail,
+    adminInitial: adminInitial ?? adminEmail[0]?.toUpperCase() ?? "A",
+    targetEmail: targetEmail ?? null,
+    subject,
+    message,
+    recipientCount: sent,
+    createdAt: /* @__PURE__ */ new Date()
+  }).catch(() => {
+  });
+  res.json({ success: true, sent, failed, recipientCount: sent });
+}
+router4.post("/admin/broadcast/all", async (req, res) => {
+  await requireAdminSession(req, res, async (req2, res2) => {
+    try {
+      await handleBroadcast(req2, res2);
+    } catch (err) {
+      logger.error(`[admin] Broadcast all failed: ${err.message}`);
+      res2.status(500).json({ error: "MAIL_ERROR", message: "Gagal mengirim broadcast." });
+    }
+  });
 });
-router4.post("/admin/api-keys", async (req, res) => {
-  await requireAdminSession(req, res, (req2, res2) => createApiKey(req2, res2));
+router4.post("/admin/broadcast/one", async (req, res) => {
+  await requireAdminSession(req, res, async (req2, res2) => {
+    const { targetEmail } = req2.body;
+    if (!targetEmail) {
+      res2.status(400).json({ error: "VALIDATION_ERROR", message: "targetEmail required" });
+      return;
+    }
+    try {
+      await handleBroadcast(req2, res2, targetEmail);
+    } catch (err) {
+      logger.error(`[admin] Broadcast one failed: ${err.message}`);
+      res2.status(500).json({ error: "MAIL_ERROR", message: "Gagal mengirim email." });
+    }
+  });
 });
-router4.patch("/admin/api-keys/:id", async (req, res) => {
-  await requireAdminSession(req, res, (req2, res2) => updateApiKey(req2, res2));
+router4.post("/admin/broadcast", async (req, res) => {
+  await requireAdminSession(req, res, async (req2, res2) => {
+    const targetEmail = req2.body?.targetEmail;
+    try {
+      await handleBroadcast(req2, res2, targetEmail);
+    } catch (err) {
+      logger.error(`[admin] Broadcast failed: ${err.message}`);
+      res2.status(500).json({ error: "MAIL_ERROR", message: "Gagal mengirim broadcast." });
+    }
+  });
 });
-router4.delete("/admin/api-keys/:id", async (req, res) => {
-  await requireAdminSession(req, res, (req2, res2) => deleteApiKey(req2, res2));
+router4.get("/admin/broadcast-logs", async (req, res) => {
+  await requireAdminSession(req, res, async (req2, res2) => {
+    const limit = Math.min(Number(req2.query.limit) || 50, 200);
+    try {
+      const logs = await db.select().from(broadcastLogsTable).orderBy((0, import_drizzle_orm5.desc)(broadcastLogsTable.createdAt)).limit(limit);
+      res2.json({ data: logs.map((l) => ({ ...l, createdAt: l.createdAt.toISOString() })) });
+    } catch {
+      res2.status(500).json({ error: "SERVER_ERROR" });
+    }
+  });
 });
-router4.get("/admin/ip-whitelist", async (req, res) => {
-  await requireAdminSession(req, res, (req2, res2) => listIpWhitelist(req2, res2));
+router4.post("/admin/test-email", async (req, res) => {
+  await requireAdminSession(req, res, async (req2, res2) => {
+    const adminEmail = req2.adminEmail;
+    try {
+      await sendTestEmail(adminEmail);
+      res2.json({ success: true });
+    } catch (err) {
+      res2.status(500).json({ error: "MAIL_ERROR", message: err.message });
+    }
+  });
 });
-router4.post("/admin/ip-whitelist", async (req, res) => {
-  await requireAdminSession(req, res, (req2, res2) => addIpWhitelist(req2, res2));
-});
-router4.patch("/admin/ip-whitelist/:id", async (req, res) => {
-  await requireAdminSession(req, res, (req2, res2) => updateIpWhitelist(req2, res2));
-});
-router4.delete("/admin/ip-whitelist/:id", async (req, res) => {
-  await requireAdminSession(req, res, (req2, res2) => deleteIpWhitelist(req2, res2));
-});
-router4.get("/admin/request-logs", async (req, res) => {
-  await requireAdminSession(req, res, (req2, res2) => getRequestLogs(req2, res2));
-});
+router4.get("/admin/api-keys", async (req, res) => requireAdminSession(req, res, (req2, res2) => listApiKeys(req2, res2)));
+router4.post("/admin/api-keys", async (req, res) => requireAdminSession(req, res, (req2, res2) => createApiKey(req2, res2)));
+router4.patch("/admin/api-keys/:id", async (req, res) => requireAdminSession(req, res, (req2, res2) => updateApiKey(req2, res2)));
+router4.delete("/admin/api-keys/:id", async (req, res) => requireAdminSession(req, res, (req2, res2) => deleteApiKey(req2, res2)));
+router4.get("/admin/ip-whitelist", async (req, res) => requireAdminSession(req, res, (req2, res2) => listIpWhitelist(req2, res2)));
+router4.post("/admin/ip-whitelist", async (req, res) => requireAdminSession(req, res, (req2, res2) => addIpWhitelist(req2, res2)));
+router4.patch("/admin/ip-whitelist/:id", async (req, res) => requireAdminSession(req, res, (req2, res2) => updateIpWhitelist(req2, res2)));
+router4.delete("/admin/ip-whitelist/:id", async (req, res) => requireAdminSession(req, res, (req2, res2) => deleteIpWhitelist(req2, res2)));
+router4.get("/admin/request-logs", async (req, res) => requireAdminSession(req, res, (req2, res2) => getRequestLogs(req2, res2)));
 var admin_default = router4;
 
 // server/routes/index.ts
@@ -1414,7 +1512,7 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization", "X-Webhook-Secret", "X-API-Key"]
   })
 );
-app.use((0, import_cookie_parser.default)());
+app.use((0, import_cookie_parser.default)(process.env.SESSION_SECRET || "kaai-fallback-secret-change-me"));
 app.use(import_express6.default.json({ limit: "2mb" }));
 app.use(import_express6.default.urlencoded({ extended: true, limit: "2mb" }));
 app.use(globalRateLimit);
