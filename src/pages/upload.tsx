@@ -5,7 +5,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { motion, AnimatePresence } from "framer-motion";
-import { Upload as UploadIcon, CheckCircle2, Code2, AlertCircle, Send, ChevronDown, Search, X } from "lucide-react";
+import { Upload as UploadIcon, CheckCircle2, Code2, AlertCircle, Send, ChevronDown, Search, X, Lock, KeyRound, Eye, EyeOff } from "lucide-react";
 
 import { useCreateSnippet, getListSnippetsQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -198,6 +198,10 @@ export default function Upload() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [submitted, setSubmitted] = useState(false);
+  const [isLocked, setIsLocked] = useState(false);
+  const [lockType, setLockType] = useState<"password" | "pin">("password");
+  const [lockPassword, setLockPassword] = useState("");
+  const [showLockPw, setShowLockPw] = useState(false);
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -226,11 +230,23 @@ export default function Upload() {
         return;
       }
 
+      if (isLocked) {
+        if (!lockPassword || lockPassword.length < 4) {
+          toast({ title: "Validasi gagal", description: "Password/PIN minimal 4 karakter.", variant: "destructive" });
+          return;
+        }
+        if (lockType === "pin" && !/^\d+$/.test(lockPassword)) {
+          toast({ title: "Validasi gagal", description: "PIN hanya boleh berisi angka.", variant: "destructive" });
+          return;
+        }
+      }
+
       await createSnippet.mutateAsync({
         data: {
           ...values,
           tags: tagsArray,
-        },
+          ...(isLocked ? { isLocked: true, lockType, lockPassword } : { isLocked: false }),
+        } as any,
       });
 
       queryClient.invalidateQueries({ queryKey: getListSnippetsQueryKey() });
@@ -426,6 +442,97 @@ export default function Upload() {
                     </FormItem>
                   )}
                 />
+              </div>
+            </div>
+
+            {/* Lock toggle */}
+            <div className="pt-2">
+              <div
+                className={cn(
+                  "rounded-xl border transition-all p-4",
+                  isLocked ? "border-amber-500/40 bg-amber-500/5" : "border-border/40 bg-background/30",
+                )}
+              >
+                <button
+                  type="button"
+                  onClick={() => setIsLocked(!isLocked)}
+                  className="flex items-center gap-3 w-full text-left group"
+                >
+                  <div className={cn(
+                    "w-9 h-5 rounded-full relative transition-all flex-shrink-0",
+                    isLocked ? "bg-amber-500" : "bg-border/60",
+                  )}>
+                    <div className={cn(
+                      "absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all",
+                      isLocked ? "left-4" : "left-0.5",
+                    )} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5 text-amber-400" />
+                      Kunci Snippet
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">Lindungi kode dengan password atau PIN</p>
+                  </div>
+                </button>
+
+                <AnimatePresence>
+                  {isLocked && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="pt-4 mt-4 border-t border-amber-500/20 space-y-3">
+                        {/* Lock type selector */}
+                        <div className="flex gap-2">
+                          {(["password", "pin"] as const).map((type) => (
+                            <button
+                              key={type}
+                              type="button"
+                              onClick={() => { setLockType(type); setLockPassword(""); }}
+                              className={cn(
+                                "flex-1 py-1.5 rounded-lg border text-xs font-medium transition-all",
+                                lockType === type
+                                  ? "border-amber-500/60 bg-amber-500/10 text-amber-400"
+                                  : "border-border/40 text-muted-foreground hover:text-foreground",
+                              )}
+                            >
+                              {type === "password" ? "Password" : "PIN Angka"}
+                            </button>
+                          ))}
+                        </div>
+                        {/* Password/PIN input */}
+                        <div className="relative">
+                          <Input
+                            type={showLockPw ? "text" : (lockType === "pin" ? "tel" : "password")}
+                            inputMode={lockType === "pin" ? "numeric" : undefined}
+                            pattern={lockType === "pin" ? "[0-9]*" : undefined}
+                            placeholder={lockType === "pin" ? "Masukkan PIN (min 4 digit)..." : "Masukkan password (min 4 karakter)..."}
+                            value={lockPassword}
+                            onChange={(e) => setLockPassword(e.target.value)}
+                            maxLength={lockType === "pin" ? 10 : 100}
+                            className="pr-10 bg-background/50 text-sm border-amber-500/30 focus-visible:ring-amber-500/30"
+                            autoComplete="off"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowLockPw(!showLockPw)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                            tabIndex={-1}
+                          >
+                            {showLockPw ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-amber-400/80 flex items-center gap-1">
+                          <KeyRound className="w-3 h-3" />
+                          {lockType === "pin" ? "Simpan PIN ini baik-baik, tidak bisa dipulihkan." : "Simpan password ini baik-baik, tidak bisa dipulihkan."}
+                        </p>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             </div>
 

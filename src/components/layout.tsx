@@ -7,6 +7,7 @@ const NAV_ITEMS = [
   { href: "/", label: "Library", icon: BookOpen },
   { href: "/upload", label: "Upload", icon: Upload },
   { href: "/stats", label: "Stats", icon: BarChart3 },
+  { href: "/docs", label: "API Docs", icon: FileText },
 ];
 
 const LOGO_URL = "https://raw.githubusercontent.com/akaanakbaik/my-cdn/main/furinaai/codes-snipset-kaai/logonobg.png";

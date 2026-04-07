@@ -1058,8 +1058,19 @@ function SnippetControlTab() {
 
 // ─── Tab: Analytics ──────────────────────────────────────────────────────────
 
+type AnalyticsData = {
+  totals: {
+    total: number; pending: number; approved: number; rejected: number;
+    totalViews: number; totalCopies: number; totalAuthors: number;
+  };
+  submissionsPerDay: { date: string; count: number }[];
+  topByEngagement: { email: string; name: string; score: number; views: number; copies: number; snippetCount: number; topLanguage: string }[];
+  topBySnippets: { email: string; name: string; snippetCount: number; topLanguage: string; views: number; copies: number }[];
+  topLanguages: { language: string; count: number }[];
+};
+
 function AnalyticsTab() {
-  const [data, setData] = useState<{ totals: any; submissionsPerDay: { date: string; count: number }[] } | null>(null);
+  const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchData = async () => {
@@ -1086,9 +1097,10 @@ function AnalyticsTab() {
       </div>
 
       {loading ? (
-        <div className="space-y-3">{[1,2,3].map(i => <Skeleton key={i} className="h-20 rounded-xl" />)}</div>
+        <div className="space-y-3">{[1,2,3,4,5].map(i => <Skeleton key={i} className="h-20 rounded-xl" />)}</div>
       ) : (
         <>
+          {/* Main stats */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {[
               { label: "Total Snippet", value: data?.totals.total ?? 0, color: "text-blue-400", bg: "bg-blue-500/10 border-blue-500/20" },
@@ -1103,6 +1115,21 @@ function AnalyticsTab() {
             ))}
           </div>
 
+          {/* Engagement stats */}
+          <div className="grid grid-cols-3 gap-3">
+            {[
+              { label: "Total Views", value: (data?.totals.totalViews ?? 0).toLocaleString(), color: "text-purple-400", bg: "bg-purple-500/10 border-purple-500/20" },
+              { label: "Total Copies", value: (data?.totals.totalCopies ?? 0).toLocaleString(), color: "text-cyan-400", bg: "bg-cyan-500/10 border-cyan-500/20" },
+              { label: "Total Authors", value: data?.totals.totalAuthors ?? 0, color: "text-orange-400", bg: "bg-orange-500/10 border-orange-500/20" },
+            ].map(({ label, value, color, bg }) => (
+              <div key={label} className={cn("glass-card rounded-xl p-4 text-center border", bg)}>
+                <p className={cn("text-xl font-bold font-heading", color)}>{value}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Chart */}
           <div className="glass-card rounded-xl p-5">
             <h3 className="text-sm font-medium mb-4 flex items-center gap-2">
               <TrendingUp className="w-4 h-4 text-blue-400" /> Pengiriman 14 Hari Terakhir
@@ -1124,6 +1151,71 @@ function AnalyticsTab() {
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
+          </div>
+
+          {/* Top Authors by Engagement */}
+          <div className="glass-card rounded-xl p-5">
+            <h3 className="text-sm font-medium mb-3 flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-purple-400" /> Top Author by Engagement (views×1 + copies×2)
+            </h3>
+            <div className="space-y-2">
+              {(data?.topByEngagement ?? []).slice(0, 5).map((a, i) => (
+                <div key={a.email} className="flex items-center gap-3 py-1.5 border-b border-border/30 last:border-0">
+                  <span className={cn("text-xs font-bold w-5 text-right", i === 0 ? "text-yellow-400" : i === 1 ? "text-zinc-300" : i === 2 ? "text-amber-600" : "text-muted-foreground")}>#{i + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{a.name}</p>
+                    <p className="text-[10px] text-muted-foreground">{a.email} · {a.topLanguage}</p>
+                  </div>
+                  <div className="text-right text-xs flex gap-3">
+                    <span className="text-muted-foreground">{a.views}v</span>
+                    <span className="text-muted-foreground">{a.copies}c</span>
+                    <span className="font-semibold text-purple-400">Score: {a.score}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Top Authors by Snippet Count */}
+          <div className="glass-card rounded-xl p-5">
+            <h3 className="text-sm font-medium mb-3 flex items-center gap-2">
+              <Code2 className="w-4 h-4 text-blue-400" /> Top Author by Jumlah Snippet
+            </h3>
+            <div className="space-y-2">
+              {(data?.topBySnippets ?? []).slice(0, 5).map((a, i) => (
+                <div key={a.email} className="flex items-center gap-3 py-1.5 border-b border-border/30 last:border-0">
+                  <span className={cn("text-xs font-bold w-5 text-right", i === 0 ? "text-yellow-400" : i === 1 ? "text-zinc-300" : i === 2 ? "text-amber-600" : "text-muted-foreground")}>#{i + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{a.name}</p>
+                    <p className="text-[10px] text-muted-foreground">{a.email} · {a.topLanguage}</p>
+                  </div>
+                  <span className="font-semibold text-blue-400 text-sm">{a.snippetCount} snippet</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Top Languages */}
+          <div className="glass-card rounded-xl p-5">
+            <h3 className="text-sm font-medium mb-3 flex items-center gap-2">
+              <BarChart3 className="w-4 h-4 text-green-400" /> Top Bahasa Pemrograman
+            </h3>
+            <div className="space-y-2">
+              {(data?.topLanguages ?? []).slice(0, 8).map((l, i) => {
+                const max = data?.topLanguages[0]?.count ?? 1;
+                const pct = Math.round((l.count / max) * 100);
+                return (
+                  <div key={l.language} className="flex items-center gap-3">
+                    <span className="text-xs text-muted-foreground w-5 text-right">#{i + 1}</span>
+                    <span className="text-xs font-mono text-foreground w-24 truncate">{l.language}</span>
+                    <div className="flex-1 bg-white/5 rounded-full h-2 overflow-hidden">
+                      <div className="h-full bg-green-500/70 rounded-full" style={{ width: `${pct}%` }} />
+                    </div>
+                    <span className="text-xs text-muted-foreground w-8 text-right">{l.count}</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </>
       )}

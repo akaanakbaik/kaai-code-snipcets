@@ -30,6 +30,10 @@ export const snippetsTable = pgTable("snippets", {
   rejectReason: text("reject_reason"),
   viewCount: integer("view_count").notNull().default(0),
   copyCount: integer("copy_count").notNull().default(0),
+  isLocked: boolean("is_locked").notNull().default(false),
+  lockType: text("lock_type"),
+  lockHash: text("lock_hash"),
+  lockSalt: text("lock_salt"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -153,6 +157,17 @@ export const apiKeyUsageTable = pgTable("api_key_usage", {
   requestsToday: integer("requests_today").notNull().default(0),
   requestsMonth: integer("requests_month").notNull().default(0),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// ─── Snippet Lock Attempts ────────────────────────────────────────────────────
+
+export const snippetLockAttemptsTable = pgTable("snippet_lock_attempts", {
+  id: text("id").primaryKey(),
+  snippetId: text("snippet_id").notNull(),
+  ipAddress: text("ip_address").notNull(),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  bannedUntil: timestamp("banned_until", { withTimezone: true }),
 });
 
 // ─── Types ────────────────────────────────────────────────────────────────────

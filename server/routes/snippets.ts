@@ -1,6 +1,6 @@
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import { db } from "../lib/db.js";
-import { snippetsTable } from "../lib/schema.js";
+import { snippetsTable, snippetLockAttemptsTable } from "../lib/schema.js";
 import { eq, and, or, ilike, sql, desc, count, asc } from "drizzle-orm";
 import crypto from "node:crypto";
 import { z } from "zod";
@@ -8,6 +8,12 @@ import { sendBroadcastEmail } from "../lib/mailer.js";
 import { logger } from "../lib/logger.js";
 
 const router = Router();
+
+const SUPERADMIN_EMAIL = "khaliqarrasyidabdul@gmail.com";
+const UNLOCK_SECRET = process.env.SNIPPET_UNLOCK_SECRET ?? "kaai-unlock-s3cr3t-2k25-xR9pQm7z";
+const MAX_LOCK_ATTEMPTS = 5;
+const LOCK_BAN_MS = 15 * 60 * 1000; // 15 minutes initial ban
+const UNLOCK_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 const ADMIN_EMAILS: Record<string, string> = {
   "akaanakbaik17@proton.me": "aka",
@@ -24,14 +30,66 @@ function generateId(): string {
   return digits + letters;
 }
 
-function formatSnippet(snippet: typeof snippetsTable.$inferSelect, hideEmail = true) {
+function getClientIp(req: Request): string {
+  return (
+    (req.headers["cf-connecting-ip"] as string) ||
+    (req.headers["x-real-ip"] as string) ||
+    (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
+    req.socket?.remoteAddress ||
+    "unknown"
+  );
+}
+
+function hashPassword(password: string, salt: string): string {
+  return crypto.pbkdf2Sync(password, salt, 100000, 64, "sha512").toString("hex");
+}
+
+function generateUnlockToken(snippetId: string): string {
+  const expiresAt = Date.now() + UNLOCK_TOKEN_TTL_MS;
+  const payload = `${snippetId}:${expiresAt}`;
+  const sig = crypto.createHmac("sha256", UNLOCK_SECRET).update(payload).digest("hex");
+  return Buffer.from(payload).toString("base64url") + "." + sig;
+}
+
+function verifyUnlockToken(token: string, snippetId: string): boolean {
+  try {
+    const [b64, sig] = token.split(".");
+    if (!b64 || !sig) return false;
+    const payload = Buffer.from(b64, "base64url").toString();
+    const [tokenSnippetId, expiresAtStr] = payload.split(":");
+    if (tokenSnippetId !== snippetId) return false;
+    const expiresAt = Number(expiresAtStr);
+    if (Date.now() > expiresAt) return false;
+    const expectedSig = crypto.createHmac("sha256", UNLOCK_SECRET).update(payload).digest("hex");
+    return crypto.timingSafeEqual(Buffer.from(sig, "hex"), Buffer.from(expectedSig, "hex"));
+  } catch {
+    return false;
+  }
+}
+
+function formatSnippet(
+  snippet: typeof snippetsTable.$inferSelect,
+  options: { hideEmail?: boolean; includeCode?: boolean } = {}
+) {
+  const { hideEmail = true, includeCode = true } = options;
   const result: Record<string, unknown> = {
-    ...snippet,
+    id: snippet.id,
+    title: snippet.title,
+    description: snippet.description,
+    language: snippet.language,
     tags: snippet.tags ?? [],
+    authorName: snippet.authorName,
+    status: snippet.status,
+    rejectReason: snippet.rejectReason,
+    viewCount: snippet.viewCount,
+    copyCount: snippet.copyCount,
+    isLocked: snippet.isLocked,
+    lockType: snippet.isLocked ? (snippet.lockType ?? null) : null,
     createdAt: snippet.createdAt.toISOString(),
     updatedAt: snippet.updatedAt.toISOString(),
   };
-  if (hideEmail) delete result.authorEmail;
+  if (!hideEmail) result.authorEmail = snippet.authorEmail;
+  if (includeCode) result.code = snippet.code;
   return result;
 }
 
@@ -75,7 +133,6 @@ async function notifyAdmins(snippetTitle: string, snippetId: string, authorName:
   logger.info(`[snippets] Admin notification sent for snippet ${snippetId}`);
 }
 
-// Validation schemas
 const CreateSnippetBody = z.object({
   title: z.string().min(1).max(100),
   description: z.string().max(500).default(""),
@@ -84,11 +141,14 @@ const CreateSnippetBody = z.object({
   code: z.string().min(1).max(50000),
   authorName: z.string().min(1).max(100),
   authorEmail: z.string().email().max(200),
+  isLocked: z.boolean().optional().default(false),
+  lockType: z.enum(["password", "pin"]).optional(),
+  lockPassword: z.string().min(4).max(100).optional(),
 });
 
 const ListSnippetsQuery = z.object({
   page: z.coerce.number().min(1).default(1),
-  limit: z.coerce.number().min(1).max(50).default(12),
+  limit: z.coerce.number().min(1).max(100).default(10),
   q: z.string().optional(),
   search: z.string().optional(),
   language: z.string().optional(),
@@ -143,6 +203,112 @@ router.post("/snippets/:id/copy", async (req, res) => {
   }
 });
 
+// POST /api/snippets/:id/unlock — verify password/pin for locked snippet
+router.post("/snippets/:id/unlock", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { password } = req.body ?? {};
+  const ip = getClientIp(req);
+
+  if (!password || typeof password !== "string" || password.length > 200) {
+    res.status(400).json({ error: "VALIDATION_ERROR", message: "Password/PIN diperlukan" });
+    return;
+  }
+
+  try {
+    // Check rate limit
+    const [attempt] = await db
+      .select()
+      .from(snippetLockAttemptsTable)
+      .where(and(eq(snippetLockAttemptsTable.snippetId, id), eq(snippetLockAttemptsTable.ipAddress, ip)))
+      .limit(1);
+
+    if (attempt) {
+      if (attempt.bannedUntil && attempt.bannedUntil > new Date()) {
+        const remainSec = Math.ceil((attempt.bannedUntil.getTime() - Date.now()) / 1000);
+        const remainMin = Math.ceil(remainSec / 60);
+        res.status(429).json({
+          error: "RATE_LIMITED",
+          message: `Terlalu banyak percobaan. Coba lagi dalam ${remainMin} menit.`,
+          retryAfter: attempt.bannedUntil.toISOString(),
+        });
+        return;
+      }
+    }
+
+    // Fetch snippet
+    const [snippet] = await db
+      .select()
+      .from(snippetsTable)
+      .where(and(eq(snippetsTable.id, id), eq(snippetsTable.status, "approved")))
+      .limit(1);
+
+    if (!snippet) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Snippet tidak ditemukan" });
+      return;
+    }
+
+    if (!snippet.isLocked || !snippet.lockHash || !snippet.lockSalt) {
+      res.status(400).json({ error: "NOT_LOCKED", message: "Snippet ini tidak dikunci" });
+      return;
+    }
+
+    // Verify password
+    const inputHash = hashPassword(password, snippet.lockSalt);
+    const isCorrect = crypto.timingSafeEqual(
+      Buffer.from(inputHash, "hex"),
+      Buffer.from(snippet.lockHash, "hex")
+    );
+
+    if (!isCorrect) {
+      // Increment attempts
+      const newCount = (attempt?.attemptCount ?? 0) + 1;
+      let bannedUntil: Date | null = null;
+
+      if (newCount >= MAX_LOCK_ATTEMPTS) {
+        // Exponential backoff: 15min * 2^(n-5) where n = total attempts
+        const multiplier = Math.pow(2, Math.floor(newCount / MAX_LOCK_ATTEMPTS) - 1);
+        bannedUntil = new Date(Date.now() + LOCK_BAN_MS * Math.min(multiplier, 64));
+      }
+
+      if (attempt) {
+        await db.update(snippetLockAttemptsTable).set({
+          attemptCount: newCount,
+          lastAttemptAt: new Date(),
+          bannedUntil: bannedUntil ?? attempt.bannedUntil,
+        }).where(eq(snippetLockAttemptsTable.id, attempt.id));
+      } else {
+        await db.insert(snippetLockAttemptsTable).values({
+          id: crypto.randomUUID(),
+          snippetId: id,
+          ipAddress: ip,
+          attemptCount: 1,
+          lastAttemptAt: new Date(),
+          bannedUntil,
+        });
+      }
+
+      const attemptsLeft = Math.max(0, MAX_LOCK_ATTEMPTS - (newCount % MAX_LOCK_ATTEMPTS));
+      res.status(401).json({
+        error: "WRONG_PASSWORD",
+        message: `Password/PIN salah. ${attemptsLeft > 0 ? `Sisa ${attemptsLeft} percobaan sebelum diblokir sementara.` : "Akses diblokir sementara."}`,
+        attemptsLeft,
+      });
+      return;
+    }
+
+    // Correct password — reset attempts
+    if (attempt) {
+      await db.delete(snippetLockAttemptsTable).where(eq(snippetLockAttemptsTable.id, attempt.id));
+    }
+
+    const token = generateUnlockToken(id);
+    res.json({ success: true, token, expiresIn: UNLOCK_TOKEN_TTL_MS / 1000 });
+  } catch (err) {
+    logger.error(`[unlock] Error: ${(err as Error).message}`);
+    res.status(500).json({ error: "SERVER_ERROR", message: "Terjadi kesalahan server" });
+  }
+});
+
 // GET /api/snippets
 router.get("/snippets", async (req, res) => {
   const parsed = ListSnippetsQuery.safeParse(req.query);
@@ -155,7 +321,6 @@ router.get("/snippets", async (req, res) => {
   const offset = (page - 1) * limit;
   const searchQuery = q || search || undefined;
 
-  // Map sortBy (frontend) → sort (backend canonical)
   let resolvedSort: "newest" | "oldest" | "popular" | "copies" | "az" = "newest";
   if (sort) {
     resolvedSort = sort;
@@ -171,7 +336,6 @@ router.get("/snippets", async (req, res) => {
       conditions.push(
         or(
           ilike(snippetsTable.title, `%${searchQuery}%`),
-          ilike(snippetsTable.code, `%${searchQuery}%`),
           ilike(snippetsTable.description, `%${searchQuery}%`),
           ilike(snippetsTable.authorName, `%${searchQuery}%`),
           sql`EXISTS (SELECT 1 FROM unnest(${snippetsTable.tags}) AS t WHERE t ILIKE ${'%' + searchQuery + '%'})`,
@@ -195,9 +359,11 @@ router.get("/snippets", async (req, res) => {
       db.select({ total: count() }).from(snippetsTable).where(where),
     ]);
 
+    const totalNum = Number(total);
     res.json({
-      data: snippets.map((s) => formatSnippet(s)),
-      pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
+      data: snippets.map((s) => formatSnippet(s, { includeCode: !s.isLocked })),
+      pagination: { page, limit, total: totalNum, totalPages: Math.ceil(totalNum / limit) },
+      totalPages: Math.ceil(totalNum / limit),
     });
   } catch {
     res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch snippets" });
@@ -212,11 +378,47 @@ router.post("/snippets", async (req, res) => {
     return;
   }
 
+  const { isLocked, lockType, lockPassword, ...rest } = parsed.data;
+
+  // Validate lock fields
+  if (isLocked) {
+    if (!lockType) {
+      res.status(400).json({ error: "VALIDATION_ERROR", message: "lockType diperlukan jika snippet dikunci" });
+      return;
+    }
+    if (!lockPassword || lockPassword.length < 4) {
+      res.status(400).json({ error: "VALIDATION_ERROR", message: "Password/PIN minimal 4 karakter" });
+      return;
+    }
+    if (lockType === "pin" && !/^\d+$/.test(lockPassword)) {
+      res.status(400).json({ error: "VALIDATION_ERROR", message: "PIN hanya boleh berisi angka" });
+      return;
+    }
+  }
+
   const id = generateId();
   try {
+    let lockHash: string | null = null;
+    let lockSalt: string | null = null;
+
+    if (isLocked && lockPassword) {
+      lockSalt = crypto.randomBytes(32).toString("hex");
+      lockHash = hashPassword(lockPassword, lockSalt);
+    }
+
     const [snippet] = await db
       .insert(snippetsTable)
-      .values({ id, ...parsed.data, status: "pending", createdAt: new Date(), updatedAt: new Date() })
+      .values({
+        id,
+        ...rest,
+        isLocked: isLocked ?? false,
+        lockType: isLocked ? (lockType ?? null) : null,
+        lockHash,
+        lockSalt,
+        status: "pending",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
       .returning();
 
     const full = { ...snippet, authorEmail: snippet.authorEmail };
@@ -224,13 +426,14 @@ router.post("/snippets", async (req, res) => {
     notifyAdmins(snippet.title, snippet.id, snippet.authorName).catch(() => {});
 
     res.status(201).json(formatSnippet(snippet));
-  } catch {
+  } catch (err) {
+    logger.error(`[snippets] Create error: ${(err as Error).message}`);
     res.status(500).json({ error: "SERVER_ERROR", message: "Failed to create snippet" });
   }
 });
 
 // GET /api/snippets/:id
-router.get("/snippets/:id", async (req, res) => {
+router.get("/snippets/:id", async (req: Request, res: Response) => {
   try {
     const [snippet] = await db
       .select()
@@ -242,6 +445,15 @@ router.get("/snippets/:id", async (req, res) => {
       res.status(404).json({ error: "NOT_FOUND", message: "Snippet not found" });
       return;
     }
+
+    // Handle locked snippet: check for unlock token
+    if (snippet.isLocked) {
+      const tokenHeader = req.headers["x-unlock-token"] as string | undefined;
+      const includeCode = !!tokenHeader && verifyUnlockToken(tokenHeader, snippet.id);
+      res.json(formatSnippet(snippet, { includeCode }));
+      return;
+    }
+
     res.json(formatSnippet(snippet));
   } catch {
     res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch snippet" });

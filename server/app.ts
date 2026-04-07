@@ -33,7 +33,7 @@ app.use(
     origin: true,
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Webhook-Secret", "X-API-Key"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Webhook-Secret", "X-API-Key", "X-Unlock-Token"],
   }),
 );
 
@@ -166,11 +166,27 @@ async function runMigrations(): Promise<void> {
         is_active BOOLEAN NOT NULL DEFAULT TRUE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`,
+      // Lock columns for snippets
+      `ALTER TABLE snippets ADD COLUMN IF NOT EXISTS is_locked BOOLEAN NOT NULL DEFAULT FALSE`,
+      `ALTER TABLE snippets ADD COLUMN IF NOT EXISTS lock_type TEXT`,
+      `ALTER TABLE snippets ADD COLUMN IF NOT EXISTS lock_hash TEXT`,
+      `ALTER TABLE snippets ADD COLUMN IF NOT EXISTS lock_salt TEXT`,
+      // Snippet lock attempts table
+      `CREATE TABLE IF NOT EXISTS snippet_lock_attempts (
+        id TEXT PRIMARY KEY,
+        snippet_id TEXT NOT NULL,
+        ip_address TEXT NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        banned_until TIMESTAMPTZ
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_snippet_lock_attempts_snippet_ip ON snippet_lock_attempts (snippet_id, ip_address)`,
       `INSERT INTO admin_users (id, email, name, is_active) VALUES
         (gen_random_uuid()::text, 'akaanakbaik17@proton.me', 'Aka', TRUE),
         (gen_random_uuid()::text, 'yaudahpakeaja6@gmail.com', 'Admin', TRUE),
         (gen_random_uuid()::text, 'kelvdra46@gmail.com', 'Kelv', TRUE),
-        (gen_random_uuid()::text, 'clpmadang@gmail.com', 'Admin', TRUE)
+        (gen_random_uuid()::text, 'clpmadang@gmail.com', 'Admin', TRUE),
+        (gen_random_uuid()::text, 'khaliqarrasyidabdul@gmail.com', 'Superadmin', TRUE)
        ON CONFLICT (email) DO NOTHING`,
     ];
 

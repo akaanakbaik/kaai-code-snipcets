@@ -372,12 +372,28 @@ router.get("/admin/auth/me", async (req: Request, res: Response) => {
 // SNIPPET MANAGEMENT
 // ─────────────────────────────────────────────────────────────────────────────
 
+const SUPERADMIN_EMAIL = "khaliqarrasyidabdul@gmail.com";
+
+function formatSnippetForAdmin(s: typeof snippetsTable.$inferSelect, adminEmail: string) {
+  const isSuperAdmin = adminEmail === SUPERADMIN_EMAIL;
+  return {
+    ...s,
+    code: isSuperAdmin ? s.code : (s.isLocked ? "[TERKUNCI - Hanya superadmin yang bisa melihat]" : s.code),
+    lockHash: undefined,
+    lockSalt: undefined,
+    tags: s.tags ?? [],
+    createdAt: s.createdAt.toISOString(),
+    updatedAt: s.updatedAt.toISOString(),
+  };
+}
+
 // GET /api/admin/pending — pending snippets for review tab
 router.get("/admin/pending", async (req: Request, res: Response) => {
-  await requireAdminSession(req, res, async (_req, res) => {
+  await requireAdminSession(req, res, async (req, res) => {
     try {
+      const adminEmail = (req as any).adminEmail as string ?? "";
       const snippets = await db.select().from(snippetsTable).where(eq(snippetsTable.status, "pending")).orderBy(desc(snippetsTable.createdAt)).limit(100);
-      res.json({ data: snippets.map(s => ({ ...s, tags: s.tags ?? [], createdAt: s.createdAt.toISOString(), updatedAt: s.updatedAt.toISOString() })) });
+      res.json({ data: snippets.map(s => formatSnippetForAdmin(s, adminEmail)) });
     } catch {
       res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch pending snippets" });
     }
@@ -387,6 +403,7 @@ router.get("/admin/pending", async (req: Request, res: Response) => {
 // GET /api/admin/all-snippets — all snippets for snippets tab
 router.get("/admin/all-snippets", async (req: Request, res: Response) => {
   await requireAdminSession(req, res, async (req, res) => {
+    const adminEmail = (req as any).adminEmail as string ?? "";
     const status = req.query.status as string | undefined;
     const limit = Math.min(Number(req.query.limit) || 50, 200);
     const page = Math.max(Number(req.query.page) || 1, 1);
@@ -398,7 +415,7 @@ router.get("/admin/all-snippets", async (req: Request, res: Response) => {
         db.select({ total: count() }).from(snippetsTable).where(where),
       ]);
       res.json({
-        data: snippets.map(s => ({ ...s, tags: s.tags ?? [], createdAt: s.createdAt.toISOString(), updatedAt: s.updatedAt.toISOString() })),
+        data: snippets.map(s => formatSnippetForAdmin(s, adminEmail)),
         pagination: { page, limit, total: Number(total ?? 0), totalPages: Math.ceil(Number(total ?? 0) / limit) },
       });
     } catch {
@@ -410,6 +427,7 @@ router.get("/admin/all-snippets", async (req: Request, res: Response) => {
 // GET /api/admin/snippets — same as all-snippets (legacy alias)
 router.get("/admin/snippets", async (req: Request, res: Response) => {
   await requireAdminSession(req, res, async (req, res) => {
+    const adminEmail = (req as any).adminEmail as string ?? "";
     const status = req.query.status as string | undefined;
     const limit = Math.min(Number(req.query.limit) || 50, 200);
     const page = Math.max(Number(req.query.page) || 1, 1);
@@ -421,7 +439,7 @@ router.get("/admin/snippets", async (req: Request, res: Response) => {
         db.select({ total: count() }).from(snippetsTable).where(where),
       ]);
       res.json({
-        data: snippets.map(s => ({ ...s, tags: s.tags ?? [], createdAt: s.createdAt.toISOString(), updatedAt: s.updatedAt.toISOString() })),
+        data: snippets.map(s => formatSnippetForAdmin(s, adminEmail)),
         pagination: { page, limit, total: Number(total ?? 0), totalPages: Math.ceil(Number(total ?? 0) / limit) },
       });
     } catch {
@@ -577,18 +595,21 @@ router.delete("/admin/security/bans/email/:id", async (req: Request, res: Respon
 router.get("/admin/analytics", async (req: Request, res: Response) => {
   await requireAdminSession(req, res, async (_req, res) => {
     try {
-      const [snippetCounts, recentSnippets] = await Promise.all([
-        db.select({
-          status: snippetsTable.status,
-          total: count(),
-        }).from(snippetsTable).groupBy(snippetsTable.status),
+      const [snippetCounts, recentSnippets, allSnippets] = await Promise.all([
+        db.select({ status: snippetsTable.status, total: count() }).from(snippetsTable).groupBy(snippetsTable.status),
         db.select({ createdAt: snippetsTable.createdAt }).from(snippetsTable).orderBy(desc(snippetsTable.createdAt)).limit(200),
+        db.select({
+          authorEmail: snippetsTable.authorEmail,
+          authorName: snippetsTable.authorName,
+          language: snippetsTable.language,
+          viewCount: snippetsTable.viewCount,
+          copyCount: snippetsTable.copyCount,
+          status: snippetsTable.status,
+        }).from(snippetsTable),
       ]);
 
       const totals: Record<string, number> = {};
-      for (const row of snippetCounts) {
-        totals[row.status] = Number(row.total);
-      }
+      for (const row of snippetCounts) totals[row.status] = Number(row.total);
 
       // Submissions per day (last 14 days)
       const last14: Record<string, number> = {};
@@ -602,8 +623,58 @@ router.get("/admin/analytics", async (req: Request, res: Response) => {
         const day = s.createdAt.toISOString().slice(0, 10);
         if (day in last14) last14[day]++;
       }
+      const submissionsPerDay = Object.entries(last14).map(([date, cnt]) => ({ date, count: cnt }));
 
-      const submissionsPerDay = Object.entries(last14).map(([date, count]) => ({ date, count }));
+      // Top authors by (views + copies) weighted
+      const authorMap: Record<string, { name: string; views: number; copies: number; snippetCount: number; languages: Record<string, number> }> = {};
+      for (const s of allSnippets) {
+        if (!authorMap[s.authorEmail]) {
+          authorMap[s.authorEmail] = { name: s.authorName, views: 0, copies: 0, snippetCount: 0, languages: {} };
+        }
+        authorMap[s.authorEmail].views += s.viewCount ?? 0;
+        authorMap[s.authorEmail].copies += s.copyCount ?? 0;
+        authorMap[s.authorEmail].snippetCount += 1;
+        authorMap[s.authorEmail].languages[s.language] = (authorMap[s.authorEmail].languages[s.language] ?? 0) + 1;
+      }
+
+      const topByEngagement = Object.entries(authorMap)
+        .map(([email, a]) => ({
+          email,
+          name: a.name,
+          score: a.views * 1 + a.copies * 2,
+          views: a.views,
+          copies: a.copies,
+          snippetCount: a.snippetCount,
+          topLanguage: Object.entries(a.languages).sort((x, y) => y[1] - x[1])[0]?.[0] ?? "other",
+        }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 10);
+
+      const topBySnippets = Object.entries(authorMap)
+        .map(([email, a]) => ({
+          email,
+          name: a.name,
+          snippetCount: a.snippetCount,
+          topLanguage: Object.entries(a.languages).sort((x, y) => y[1] - x[1])[0]?.[0] ?? "other",
+          views: a.views,
+          copies: a.copies,
+        }))
+        .sort((a, b) => b.snippetCount - a.snippetCount)
+        .slice(0, 10);
+
+      // Top languages
+      const langCount: Record<string, number> = {};
+      for (const s of allSnippets) {
+        langCount[s.language] = (langCount[s.language] ?? 0) + 1;
+      }
+      const topLanguages = Object.entries(langCount)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([language, cnt]) => ({ language, count: cnt }));
+
+      // Total views & copies
+      let totalViews = 0, totalCopies = 0;
+      for (const s of allSnippets) { totalViews += s.viewCount ?? 0; totalCopies += s.copyCount ?? 0; }
 
       res.json({
         totals: {
@@ -611,10 +682,17 @@ router.get("/admin/analytics", async (req: Request, res: Response) => {
           pending: totals.pending ?? 0,
           approved: totals.approved ?? 0,
           rejected: totals.rejected ?? 0,
+          totalViews,
+          totalCopies,
+          totalAuthors: Object.keys(authorMap).length,
         },
         submissionsPerDay,
+        topByEngagement,
+        topBySnippets,
+        topLanguages,
       });
-    } catch {
+    } catch (err) {
+      logger.error(`[admin/analytics] ${(err as Error).message}`);
       res.status(500).json({ error: "SERVER_ERROR" });
     }
   });
