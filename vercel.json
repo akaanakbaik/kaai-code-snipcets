@@ -1,7 +1,7 @@
 {
-  "buildCommand": "pnpm install --frozen-lockfile && node scripts/build-server.mjs && pnpm --filter @workspace/kaai-code-snippet run build",
-  "outputDirectory": "artifacts/kaai-code-snippet/dist/public",
-  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "node scripts/build-server.mjs",
+  "outputDirectory": "dist",
+  "installCommand": "npm install --include=dev",
   "framework": null,
   "functions": {
     "api/index.js": {
