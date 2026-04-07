@@ -1,16 +1,30 @@
 import { Request, Response } from "express";
 import { db } from "../lib/db.js";
 import { apiKeysTable, apiKeyUsageTable, adminIpWhitelistTable, requestLogsTable } from "../lib/schema.js";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import crypto from "node:crypto";
 
 function hashKey(raw: string): string {
   return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
+// Format: 5 digits + 5 uppercase letters = 10 chars (e.g. "12345ABCDE")
 function generateRawKey(): string {
-  const rand = crypto.randomBytes(24).toString("base64url");
-  return `kaai_${rand}`;
+  const digits = String(10000 + crypto.randomInt(90000)); // 10000–99999 (5 digits)
+  const alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const letters = Array.from({ length: 5 }, () => alpha[crypto.randomInt(26)]).join("");
+  return `${digits}${letters}`;
+}
+
+function validateCustomKey(raw: string): string | null {
+  const cleaned = raw.trim().toUpperCase().replace(/\s/g, "");
+  if (cleaned.length < 6 || cleaned.length > 48) {
+    return "Custom key harus 6–48 karakter.";
+  }
+  if (!/^[A-Z0-9_\-]+$/.test(cleaned)) {
+    return "Custom key hanya boleh huruf kapital, angka, - atau _.";
+  }
+  return null;
 }
 
 export async function listApiKeys(req: Request, res: Response): Promise<void> {
@@ -38,15 +52,26 @@ export async function listApiKeys(req: Request, res: Response): Promise<void> {
 }
 
 export async function createApiKey(req: Request, res: Response): Promise<void> {
-  const { name, ownerEmail, rateLimitPerSecond, rateLimitPerDay, rateLimitPerMonth } = req.body;
+  const { name, ownerEmail, rateLimitPerSecond, rateLimitPerDay, rateLimitPerMonth, customKey } = req.body;
   if (!name || !ownerEmail) {
     res.status(400).json({ error: "VALIDATION_ERROR", message: "name and ownerEmail required" });
     return;
   }
 
-  const rawKey = generateRawKey();
+  let rawKey: string;
+  if (customKey && String(customKey).trim()) {
+    const errMsg = validateCustomKey(String(customKey));
+    if (errMsg) {
+      res.status(400).json({ error: "VALIDATION_ERROR", message: errMsg });
+      return;
+    }
+    rawKey = String(customKey).trim().toUpperCase().replace(/\s/g, "");
+  } else {
+    rawKey = generateRawKey();
+  }
+
   const hashed = hashKey(rawKey);
-  const keyPrefix = rawKey.slice(0, 14);
+  const keyPrefix = rawKey.slice(0, 10);
 
   try {
     const [created] = await db
@@ -78,7 +103,7 @@ export async function createApiKey(req: Request, res: Response): Promise<void> {
       rateLimitPerDay: created.rateLimitPerDay,
       rateLimitPerMonth: created.rateLimitPerMonth,
       createdAt: created.createdAt.toISOString(),
-      message: "⚠️ Save this key now — it will NOT be shown again.",
+      message: "⚠️ Simpan key ini sekarang — tidak akan ditampilkan lagi!",
     });
   } catch {
     res.status(500).json({ error: "SERVER_ERROR", message: "Failed to create API key" });
@@ -87,7 +112,7 @@ export async function createApiKey(req: Request, res: Response): Promise<void> {
 
 export async function updateApiKey(req: Request, res: Response): Promise<void> {
   const { id } = req.params;
-  const { name, isActive, rateLimitPerSecond, rateLimitPerDay, rateLimitPerMonth } = req.body;
+  const { name, isActive, rateLimitPerSecond, rateLimitPerDay, rateLimitPerMonth, newKey } = req.body;
 
   try {
     const updates: Record<string, unknown> = { updatedAt: new Date() };
@@ -97,9 +122,29 @@ export async function updateApiKey(req: Request, res: Response): Promise<void> {
     if (rateLimitPerDay !== undefined) updates.rateLimitPerDay = Number(rateLimitPerDay);
     if (rateLimitPerMonth !== undefined) updates.rateLimitPerMonth = Number(rateLimitPerMonth);
 
+    // Update key if newKey is provided
+    let newRawKey: string | undefined;
+    if (newKey && String(newKey).trim()) {
+      const errMsg = validateCustomKey(String(newKey));
+      if (errMsg) {
+        res.status(400).json({ error: "VALIDATION_ERROR", message: errMsg });
+        return;
+      }
+      newRawKey = String(newKey).trim().toUpperCase().replace(/\s/g, "");
+      updates.key = hashKey(newRawKey);
+      updates.keyPrefix = newRawKey.slice(0, 10);
+    }
+
     const [updated] = await db.update(apiKeysTable).set(updates).where(eq(apiKeysTable.id, id)).returning();
     if (!updated) { res.status(404).json({ error: "NOT_FOUND" }); return; }
-    res.json({ id: updated.id, name: updated.name, isActive: updated.isActive, updatedAt: updated.updatedAt.toISOString() });
+    res.json({
+      id: updated.id,
+      name: updated.name,
+      keyPrefix: updated.keyPrefix,
+      isActive: updated.isActive,
+      updatedAt: updated.updatedAt.toISOString(),
+      ...(newRawKey ? { newKey: newRawKey, message: "⚠️ Key baru tersimpan. Simpan sekarang — tidak akan ditampilkan lagi!" } : {}),
+    });
   } catch {
     res.status(500).json({ error: "SERVER_ERROR", message: "Failed to update API key" });
   }

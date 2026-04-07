@@ -834,8 +834,20 @@ function hashKey(raw) {
   return import_node_crypto.default.createHash("sha256").update(raw).digest("hex");
 }
 function generateRawKey() {
-  const rand = import_node_crypto.default.randomBytes(24).toString("base64url");
-  return `kaai_${rand}`;
+  const digits = String(1e4 + import_node_crypto.default.randomInt(9e4));
+  const alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const letters = Array.from({ length: 5 }, () => alpha[import_node_crypto.default.randomInt(26)]).join("");
+  return `${digits}${letters}`;
+}
+function validateCustomKey(raw) {
+  const cleaned = raw.trim().toUpperCase().replace(/\s/g, "");
+  if (cleaned.length < 6 || cleaned.length > 48) {
+    return "Custom key harus 6\u201348 karakter.";
+  }
+  if (!/^[A-Z0-9_\-]+$/.test(cleaned)) {
+    return "Custom key hanya boleh huruf kapital, angka, - atau _.";
+  }
+  return null;
 }
 async function listApiKeys(req, res) {
   try {
@@ -861,14 +873,24 @@ async function listApiKeys(req, res) {
   }
 }
 async function createApiKey(req, res) {
-  const { name, ownerEmail, rateLimitPerSecond, rateLimitPerDay, rateLimitPerMonth } = req.body;
+  const { name, ownerEmail, rateLimitPerSecond, rateLimitPerDay, rateLimitPerMonth, customKey } = req.body;
   if (!name || !ownerEmail) {
     res.status(400).json({ error: "VALIDATION_ERROR", message: "name and ownerEmail required" });
     return;
   }
-  const rawKey = generateRawKey();
+  let rawKey;
+  if (customKey && String(customKey).trim()) {
+    const errMsg = validateCustomKey(String(customKey));
+    if (errMsg) {
+      res.status(400).json({ error: "VALIDATION_ERROR", message: errMsg });
+      return;
+    }
+    rawKey = String(customKey).trim().toUpperCase().replace(/\s/g, "");
+  } else {
+    rawKey = generateRawKey();
+  }
   const hashed = hashKey(rawKey);
-  const keyPrefix = rawKey.slice(0, 14);
+  const keyPrefix = rawKey.slice(0, 10);
   try {
     const [created] = await db.insert(apiKeysTable).values({
       id: import_node_crypto.default.randomUUID(),
@@ -895,7 +917,7 @@ async function createApiKey(req, res) {
       rateLimitPerDay: created.rateLimitPerDay,
       rateLimitPerMonth: created.rateLimitPerMonth,
       createdAt: created.createdAt.toISOString(),
-      message: "\u26A0\uFE0F Save this key now \u2014 it will NOT be shown again."
+      message: "\u26A0\uFE0F Simpan key ini sekarang \u2014 tidak akan ditampilkan lagi!"
     });
   } catch {
     res.status(500).json({ error: "SERVER_ERROR", message: "Failed to create API key" });
@@ -903,7 +925,7 @@ async function createApiKey(req, res) {
 }
 async function updateApiKey(req, res) {
   const { id } = req.params;
-  const { name, isActive, rateLimitPerSecond, rateLimitPerDay, rateLimitPerMonth } = req.body;
+  const { name, isActive, rateLimitPerSecond, rateLimitPerDay, rateLimitPerMonth, newKey } = req.body;
   try {
     const updates = { updatedAt: /* @__PURE__ */ new Date() };
     if (name !== void 0) updates.name = name.trim();
@@ -911,12 +933,30 @@ async function updateApiKey(req, res) {
     if (rateLimitPerSecond !== void 0) updates.rateLimitPerSecond = Number(rateLimitPerSecond);
     if (rateLimitPerDay !== void 0) updates.rateLimitPerDay = Number(rateLimitPerDay);
     if (rateLimitPerMonth !== void 0) updates.rateLimitPerMonth = Number(rateLimitPerMonth);
+    let newRawKey;
+    if (newKey && String(newKey).trim()) {
+      const errMsg = validateCustomKey(String(newKey));
+      if (errMsg) {
+        res.status(400).json({ error: "VALIDATION_ERROR", message: errMsg });
+        return;
+      }
+      newRawKey = String(newKey).trim().toUpperCase().replace(/\s/g, "");
+      updates.key = hashKey(newRawKey);
+      updates.keyPrefix = newRawKey.slice(0, 10);
+    }
     const [updated] = await db.update(apiKeysTable).set(updates).where((0, import_drizzle_orm4.eq)(apiKeysTable.id, id)).returning();
     if (!updated) {
       res.status(404).json({ error: "NOT_FOUND" });
       return;
     }
-    res.json({ id: updated.id, name: updated.name, isActive: updated.isActive, updatedAt: updated.updatedAt.toISOString() });
+    res.json({
+      id: updated.id,
+      name: updated.name,
+      keyPrefix: updated.keyPrefix,
+      isActive: updated.isActive,
+      updatedAt: updated.updatedAt.toISOString(),
+      ...newRawKey ? { newKey: newRawKey, message: "\u26A0\uFE0F Key baru tersimpan. Simpan sekarang \u2014 tidak akan ditampilkan lagi!" } : {}
+    });
   } catch {
     res.status(500).json({ error: "SERVER_ERROR", message: "Failed to update API key" });
   }
@@ -1266,7 +1306,7 @@ router4.get("/admin/all-snippets", async (req, res) => {
       const where = status ? (0, import_drizzle_orm5.eq)(snippetsTable.status, status) : void 0;
       const [snippets, [{ total }]] = await Promise.all([
         db.select().from(snippetsTable).where(where).orderBy((0, import_drizzle_orm5.desc)(snippetsTable.createdAt)).limit(limit).offset(offset),
-        db.select({ total: (0, import_drizzle_orm5.sum)(snippetsTable.id) }).from(snippetsTable).where(where)
+        db.select({ total: (0, import_drizzle_orm5.count)() }).from(snippetsTable).where(where)
       ]);
       res2.json({
         data: snippets.map((s) => ({ ...s, tags: s.tags ?? [], createdAt: s.createdAt.toISOString(), updatedAt: s.updatedAt.toISOString() })),
@@ -1287,7 +1327,7 @@ router4.get("/admin/snippets", async (req, res) => {
       const where = status ? (0, import_drizzle_orm5.eq)(snippetsTable.status, status) : void 0;
       const [snippets, [{ total }]] = await Promise.all([
         db.select().from(snippetsTable).where(where).orderBy((0, import_drizzle_orm5.desc)(snippetsTable.createdAt)).limit(limit).offset(offset),
-        db.select({ total: (0, import_drizzle_orm5.sum)(snippetsTable.id) }).from(snippetsTable).where(where)
+        db.select({ total: (0, import_drizzle_orm5.count)() }).from(snippetsTable).where(where)
       ]);
       res2.json({
         data: snippets.map((s) => ({ ...s, tags: s.tags ?? [], createdAt: s.createdAt.toISOString(), updatedAt: s.updatedAt.toISOString() })),

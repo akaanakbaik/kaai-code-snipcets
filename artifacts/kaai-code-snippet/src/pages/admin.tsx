@@ -8,7 +8,7 @@ import {
   BellRing, BellOff, LogOut, Send, RefreshCw, Volume2, VolumeX,
   Key, Wifi, Activity, Plus, Pencil, ToggleLeft, ToggleRight,
   Copy, CheckCircle2, AlertTriangle, FileText, ChevronDown,
-  BarChart3, ShieldOff, Bell, TrendingUp,
+  BarChart3, ShieldOff, Bell, TrendingUp, Download, XCircle, Code2,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 
@@ -383,7 +383,7 @@ function ApiKeysTab() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedKey, setSelectedKey] = useState<ApiKey | null>(null);
   const [newKey, setNewKey] = useState<string | null>(null);
-  const [formData, setFormData] = useState({ name: "", ownerEmail: "", rateLimitPerSecond: "10", rateLimitPerDay: "1000", rateLimitPerMonth: "10000" });
+  const [formData, setFormData] = useState({ name: "", ownerEmail: "", rateLimitPerSecond: "10", rateLimitPerDay: "1000", rateLimitPerMonth: "10000", customKey: "", editNewKey: "" });
   const [actionLoading, setActionLoading] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -401,15 +401,17 @@ function ApiKeysTab() {
   const handleCreate = async () => {
     setActionLoading(true);
     try {
+      const body: any = { name: formData.name, ownerEmail: formData.ownerEmail, rateLimitPerSecond: +formData.rateLimitPerSecond, rateLimitPerDay: +formData.rateLimitPerDay, rateLimitPerMonth: +formData.rateLimitPerMonth };
+      if (formData.customKey.trim()) body.customKey = formData.customKey.trim();
       const res = await fetch(`${API_BASE}/api/admin/api-keys`, {
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: formData.name, ownerEmail: formData.ownerEmail, rateLimitPerSecond: +formData.rateLimitPerSecond, rateLimitPerDay: +formData.rateLimitPerDay, rateLimitPerMonth: +formData.rateLimitPerMonth }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message);
       setNewKey(data.key);
       setCreateDialogOpen(false);
-      setFormData({ name: "", ownerEmail: "", rateLimitPerSecond: "10", rateLimitPerDay: "1000", rateLimitPerMonth: "10000" });
+      setFormData({ name: "", ownerEmail: "", rateLimitPerSecond: "10", rateLimitPerDay: "1000", rateLimitPerMonth: "10000", customKey: "", editNewKey: "" });
       await fetchKeys();
     } catch (e: any) { toast({ title: "Gagal membuat API key", description: e.message, variant: "destructive" }); }
     finally { setActionLoading(false); }
@@ -419,15 +421,19 @@ function ApiKeysTab() {
     if (!selectedKey) return;
     setActionLoading(true);
     try {
+      const body: any = { name: formData.name, ownerEmail: formData.ownerEmail, rateLimitPerSecond: +formData.rateLimitPerSecond, rateLimitPerDay: +formData.rateLimitPerDay, rateLimitPerMonth: +formData.rateLimitPerMonth };
+      if (formData.editNewKey.trim()) body.newKey = formData.editNewKey.trim();
       const res = await fetch(`${API_BASE}/api/admin/api-keys/${selectedKey.id}`, {
         method: "PATCH", credentials: "include", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: formData.name, ownerEmail: formData.ownerEmail, rateLimitPerSecond: +formData.rateLimitPerSecond, rateLimitPerDay: +formData.rateLimitPerDay, rateLimitPerMonth: +formData.rateLimitPerMonth }),
+        body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error();
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message);
+      if (data.newKey) setNewKey(data.newKey);
       toast({ title: "API key diperbarui ✓" });
       setEditDialogOpen(false);
       await fetchKeys();
-    } catch { toast({ title: "Gagal update", variant: "destructive" }); }
+    } catch (e: any) { toast({ title: "Gagal update", description: e.message, variant: "destructive" }); }
     finally { setActionLoading(false); }
   };
 
@@ -506,7 +512,7 @@ function ApiKeysTab() {
                 <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => handleToggle(key)} title={key.isActive ? "Nonaktifkan" : "Aktifkan"}>
                   {key.isActive ? <ToggleRight className="w-4 h-4 text-green-400" /> : <ToggleLeft className="w-4 h-4 text-muted-foreground" />}
                 </Button>
-                <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => { setSelectedKey(key); setFormData({ name: key.name, ownerEmail: key.ownerEmail, rateLimitPerSecond: String(key.rateLimitPerSecond), rateLimitPerDay: String(key.rateLimitPerDay), rateLimitPerMonth: String(key.rateLimitPerMonth) }); setEditDialogOpen(true); }}>
+                <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => { setSelectedKey(key); setFormData({ name: key.name, ownerEmail: key.ownerEmail, rateLimitPerSecond: String(key.rateLimitPerSecond), rateLimitPerDay: String(key.rateLimitPerDay), rateLimitPerMonth: String(key.rateLimitPerMonth), customKey: "", editNewKey: "" }); setEditDialogOpen(true); }}>
                   <Pencil className="w-3.5 h-3.5" />
                 </Button>
                 <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-red-400 hover:text-red-400" onClick={() => { setSelectedKey(key); setDeleteDialogOpen(true); }}>
@@ -521,10 +527,24 @@ function ApiKeysTab() {
       {/* Create Dialog */}
       <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
         <DialogContent className="sm:max-w-md glass-card">
-          <DialogHeader><DialogTitle>Buat API Key Baru</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Buat API Key Baru</DialogTitle>
+            <DialogDescription className="text-xs">Kosongkan "Custom Key" untuk generate otomatis (5 angka + 5 huruf kapital)</DialogDescription>
+          </DialogHeader>
           <div className="space-y-3">
             <Input placeholder="Nama (mis: Telegram Bot)" value={formData.name} onChange={(e) => setFormData((f) => ({ ...f, name: e.target.value }))} className="bg-background/50" />
             <Input placeholder="Email pemilik" type="email" value={formData.ownerEmail} onChange={(e) => setFormData((f) => ({ ...f, ownerEmail: e.target.value }))} className="bg-background/50" />
+            <div>
+              <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1"><Key className="w-3 h-3" /> Custom Key <span className="opacity-50">(opsional — kosong = auto-generate)</span></p>
+              <Input
+                placeholder="Contoh: 12345ABCDE atau MYKEY123"
+                value={formData.customKey}
+                onChange={(e) => setFormData((f) => ({ ...f, customKey: e.target.value.toUpperCase() }))}
+                className="bg-background/50 font-mono text-sm"
+                maxLength={48}
+              />
+              <p className="text-[10px] text-muted-foreground mt-1">Hanya huruf kapital, angka, - atau _. 6–48 karakter.</p>
+            </div>
             <div className="grid grid-cols-3 gap-2">
               <div><p className="text-xs text-muted-foreground mb-1">Per Detik</p><Input type="number" value={formData.rateLimitPerSecond} onChange={(e) => setFormData((f) => ({ ...f, rateLimitPerSecond: e.target.value }))} className="bg-background/50 text-sm" /></div>
               <div><p className="text-xs text-muted-foreground mb-1">Per Hari</p><Input type="number" value={formData.rateLimitPerDay} onChange={(e) => setFormData((f) => ({ ...f, rateLimitPerDay: e.target.value }))} className="bg-background/50 text-sm" /></div>
@@ -533,7 +553,7 @@ function ApiKeysTab() {
           </div>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setCreateDialogOpen(false)}>Batal</Button>
-            <Button size="sm" className="bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/30" onClick={handleCreate} disabled={!formData.name || !formData.ownerEmail || actionLoading}>
+            <Button size="sm" className="bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/30" onClick={handleCreate} disabled={!formData.name || !formData.ownerEmail || !!actionLoading}>
               {actionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Key className="w-3.5 h-3.5 mr-1" />} Buat Key
             </Button>
           </DialogFooter>
@@ -543,10 +563,24 @@ function ApiKeysTab() {
       {/* Edit Dialog */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
         <DialogContent className="sm:max-w-md glass-card">
-          <DialogHeader><DialogTitle>Edit API Key</DialogTitle><DialogDescription>{selectedKey?.keyPrefix}…</DialogDescription></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Edit API Key</DialogTitle>
+            <DialogDescription>Key saat ini: <code className="font-mono text-blue-300">{selectedKey?.keyPrefix}…</code></DialogDescription>
+          </DialogHeader>
           <div className="space-y-3">
             <Input placeholder="Nama" value={formData.name} onChange={(e) => setFormData((f) => ({ ...f, name: e.target.value }))} className="bg-background/50" />
             <Input placeholder="Email pemilik" value={formData.ownerEmail} onChange={(e) => setFormData((f) => ({ ...f, ownerEmail: e.target.value }))} className="bg-background/50" />
+            <div>
+              <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1"><Key className="w-3 h-3" /> Ganti Key <span className="opacity-50">(opsional — kosong = tidak berubah)</span></p>
+              <Input
+                placeholder="Key baru custom (mis: NEWKEY123)"
+                value={formData.editNewKey}
+                onChange={(e) => setFormData((f) => ({ ...f, editNewKey: e.target.value.toUpperCase() }))}
+                className="bg-background/50 font-mono text-sm"
+                maxLength={48}
+              />
+              <p className="text-[10px] text-muted-foreground mt-1">⚠️ Jika diisi, key lama langsung tidak berlaku. Simpan key baru setelah disimpan.</p>
+            </div>
             <div className="grid grid-cols-3 gap-2">
               <div><p className="text-xs text-muted-foreground mb-1">Per Detik</p><Input type="number" value={formData.rateLimitPerSecond} onChange={(e) => setFormData((f) => ({ ...f, rateLimitPerSecond: e.target.value }))} className="bg-background/50 text-sm" /></div>
               <div><p className="text-xs text-muted-foreground mb-1">Per Hari</p><Input type="number" value={formData.rateLimitPerDay} onChange={(e) => setFormData((f) => ({ ...f, rateLimitPerDay: e.target.value }))} className="bg-background/50 text-sm" /></div>
@@ -555,7 +589,7 @@ function ApiKeysTab() {
           </div>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setEditDialogOpen(false)}>Batal</Button>
-            <Button size="sm" onClick={handleUpdate} disabled={actionLoading}>{actionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : "Simpan"}</Button>
+            <Button size="sm" onClick={handleUpdate} disabled={!!actionLoading}>{actionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : "Simpan"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -743,14 +777,16 @@ function SnippetControlTab() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [selected, setSelected] = useState<Snippet | null>(null);
   const [editForm, setEditForm] = useState({ title: "", description: "", language: "", tags: "" });
-  const [actionLoading, setActionLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const fetchSnippets = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/admin/all-snippets`, { credentials: "include" });
+      const res = await fetch(`${API_BASE}/api/admin/all-snippets?limit=200`, { credentials: "include" });
       const data = await res.json();
       setSnippets(data.data || []);
     } catch {} finally { setLoading(false); }
@@ -759,26 +795,37 @@ function SnippetControlTab() {
   useEffect(() => { fetchSnippets(); }, []);
 
   const filtered = snippets.filter((s) => {
-    const matchSearch = !search || s.title.toLowerCase().includes(search.toLowerCase()) || s.authorEmail.toLowerCase().includes(search.toLowerCase()) || s.language.toLowerCase().includes(search.toLowerCase());
+    const q = search.toLowerCase();
+    const matchSearch = !search || s.title.toLowerCase().includes(q) || s.authorEmail.toLowerCase().includes(q) || s.language.toLowerCase().includes(q) || s.id.toLowerCase().includes(q);
     const matchStatus = statusFilter === "all" || s.status === statusFilter;
     return matchSearch && matchStatus;
   });
 
+  // Stats summary
+  const stats = {
+    total: snippets.length,
+    approved: snippets.filter((s) => s.status === "approved").length,
+    pending: snippets.filter((s) => s.status === "pending").length,
+    rejected: snippets.filter((s) => s.status === "rejected").length,
+    totalViews: snippets.reduce((acc, s) => acc + (s.viewCount || 0), 0),
+    totalCopies: snippets.reduce((acc, s) => acc + (s.copyCount || 0), 0),
+  };
+
   const handleDelete = async () => {
     if (!selected) return;
-    setActionLoading(true);
+    setActionLoading("delete");
     try {
       await fetch(`${API_BASE}/api/admin/snippets/${selected.id}`, { method: "DELETE", credentials: "include" });
       toast({ title: "Snippet dihapus" });
       setDeleteOpen(false);
       await fetchSnippets();
     } catch { toast({ title: "Gagal hapus", variant: "destructive" }); }
-    finally { setActionLoading(false); }
+    finally { setActionLoading(null); }
   };
 
   const handleEdit = async () => {
     if (!selected) return;
-    setActionLoading(true);
+    setActionLoading("edit");
     try {
       const res = await fetch(`${API_BASE}/api/admin/snippets/${selected.id}`, {
         method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" },
@@ -789,7 +836,50 @@ function SnippetControlTab() {
       setEditOpen(false);
       await fetchSnippets();
     } catch { toast({ title: "Gagal update", variant: "destructive" }); }
-    finally { setActionLoading(false); }
+    finally { setActionLoading(null); }
+  };
+
+  // Feature 1: Quick status change
+  const handleStatusChange = async (snippet: Snippet, newStatus: "approved" | "rejected" | "pending") => {
+    setActionLoading(`status-${snippet.id}`);
+    try {
+      const endpoint = newStatus === "approved"
+        ? `${API_BASE}/api/admin/snippets/${snippet.id}/approve`
+        : newStatus === "rejected"
+          ? `${API_BASE}/api/admin/snippets/${snippet.id}/reject`
+          : `${API_BASE}/api/admin/snippets/${snippet.id}`;
+      const method = newStatus === "pending" ? "PUT" : "POST";
+      const body = newStatus === "pending" ? JSON.stringify({ status: "pending" }) : undefined;
+      await fetch(endpoint, { method, credentials: "include", headers: { "Content-Type": "application/json" }, body });
+      toast({ title: `Status diubah → ${newStatus}` });
+      await fetchSnippets();
+    } catch { toast({ title: "Gagal ubah status", variant: "destructive" }); }
+    finally { setActionLoading(null); }
+  };
+
+  // Feature 3: Copy snippet ID
+  const handleCopyId = (id: string) => {
+    navigator.clipboard.writeText(id).then(() => {
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 1500);
+      toast({ title: "ID disalin!" });
+    });
+  };
+
+  // Feature 4: Export JSON
+  const handleExportJson = () => {
+    const data = filtered.map((s) => ({
+      id: s.id, title: s.title, language: s.language, status: s.status,
+      authorEmail: s.authorEmail, tags: s.tags,
+      viewCount: s.viewCount, copyCount: s.copyCount,
+      createdAt: s.createdAt,
+    }));
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `snippets-${statusFilter}-${Date.now()}.json`;
+    a.click(); URL.revokeObjectURL(url);
+    toast({ title: `${data.length} snippet diekspor` });
   };
 
   const statusColors: Record<string, string> = {
@@ -800,13 +890,45 @@ function SnippetControlTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div><h2 className="text-base font-semibold">Snippet Control</h2><p className="text-xs text-muted-foreground">{filtered.length} / {snippets.length} snippet</p></div>
-        <Button size="sm" variant="outline" className="text-xs h-7" onClick={fetchSnippets}><RefreshCw className="w-3 h-3 mr-1" /> Refresh</Button>
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h2 className="text-base font-semibold">Snippet Control</h2>
+          <p className="text-xs text-muted-foreground">{filtered.length} / {snippets.length} snippet</p>
+        </div>
+        <div className="flex gap-1.5">
+          {/* Feature 4: Export JSON */}
+          <Button size="sm" variant="outline" className="text-xs h-7 border-green-500/30 text-green-400 hover:bg-green-500/10" onClick={handleExportJson} disabled={filtered.length === 0} title="Export JSON">
+            <Download className="w-3 h-3 mr-1" /> JSON
+          </Button>
+          <Button size="sm" variant="outline" className="text-xs h-7" onClick={fetchSnippets}>
+            <RefreshCw className="w-3 h-3 mr-1" /> Refresh
+          </Button>
+        </div>
       </div>
 
+      {/* Feature 5: Stats summary */}
+      {!loading && snippets.length > 0 && (
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+          {[
+            { label: "Total", value: stats.total, color: "text-blue-400" },
+            { label: "Approved", value: stats.approved, color: "text-green-400" },
+            { label: "Pending", value: stats.pending, color: "text-amber-400" },
+            { label: "Rejected", value: stats.rejected, color: "text-red-400" },
+            { label: "Views", value: stats.totalViews.toLocaleString(), color: "text-purple-400" },
+            { label: "Copies", value: stats.totalCopies.toLocaleString(), color: "text-cyan-400" },
+          ].map(({ label, value, color }) => (
+            <div key={label} className="glass-card rounded-lg px-2 py-2 text-center">
+              <p className={cn("text-base font-bold font-heading", color)}>{value}</p>
+              <p className="text-[10px] text-muted-foreground">{label}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Filters */}
       <div className="flex gap-2 flex-wrap">
-        <Input placeholder="Cari judul, email, bahasa..." value={search} onChange={(e) => setSearch(e.target.value)} className="bg-background/50 max-w-xs h-8 text-sm" />
+        <Input placeholder="Cari judul, email, bahasa, ID..." value={search} onChange={(e) => setSearch(e.target.value)} className="bg-background/50 max-w-xs h-8 text-sm" />
         <div className="flex gap-1">
           {["all", "approved", "pending", "rejected"].map((s) => (
             <button key={s} onClick={() => setStatusFilter(s)} className={cn("px-2.5 py-1 rounded-lg text-xs border transition-all", statusFilter === s ? "bg-blue-600/20 text-blue-400 border-blue-500/30" : "bg-background/50 text-muted-foreground border-border/50 hover:text-foreground")}>
@@ -821,19 +943,44 @@ function SnippetControlTab() {
       ) : (
         <div className="space-y-1.5">
           {filtered.map((snippet) => (
-            <div key={snippet.id} className="glass-card rounded-xl px-4 py-2.5 flex flex-col sm:flex-row gap-2 sm:items-center">
+            <div key={snippet.id} className="glass-card rounded-xl px-3 py-2.5 flex flex-col sm:flex-row gap-2 sm:items-center">
               <div className="flex-1 min-w-0 space-y-0.5">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-medium text-sm text-foreground truncate max-w-xs">{snippet.title}</span>
+                  <span className="font-medium text-sm text-foreground truncate max-w-[200px]">{snippet.title}</span>
                   <Badge variant="outline" className={cn("text-[10px]", statusColors[snippet.status] || "")}>{snippet.status}</Badge>
                   <span className="text-[10px] text-muted-foreground">{snippet.language}</span>
                 </div>
-                <div className="flex gap-3 text-xs text-muted-foreground">
+                <div className="flex gap-3 text-xs text-muted-foreground flex-wrap">
                   <span>{snippet.authorEmail}</span>
-                  <span>{snippet.viewCount} views · {snippet.copyCount} copies</span>
+                  <span>{snippet.viewCount ?? 0} views · {snippet.copyCount ?? 0} copies</span>
+                  <code className="text-[10px] opacity-40">{snippet.id.slice(0, 8)}…</code>
                 </div>
               </div>
-              <div className="flex gap-1.5 flex-shrink-0">
+              <div className="flex gap-1 flex-shrink-0 flex-wrap">
+                {/* Feature 1: Quick approve/reject */}
+                {snippet.status !== "approved" && (
+                  <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-green-400 hover:bg-green-500/10" title="Approve" onClick={() => handleStatusChange(snippet, "approved")} disabled={actionLoading === `status-${snippet.id}`}>
+                    {actionLoading === `status-${snippet.id}` ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                  </Button>
+                )}
+                {snippet.status !== "rejected" && (
+                  <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-red-400 hover:bg-red-500/10" title="Reject" onClick={() => handleStatusChange(snippet, "rejected")} disabled={actionLoading === `status-${snippet.id}`}>
+                    <XCircle className="w-3.5 h-3.5" />
+                  </Button>
+                )}
+                {snippet.status !== "pending" && (
+                  <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-amber-400 hover:bg-amber-500/10" title="Set Pending" onClick={() => handleStatusChange(snippet, "pending")} disabled={actionLoading === `status-${snippet.id}`}>
+                    <Clock className="w-3.5 h-3.5" />
+                  </Button>
+                )}
+                {/* Feature 2: Code preview */}
+                <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-blue-400 hover:bg-blue-500/10" title="Preview kode" onClick={() => { setSelected(snippet); setPreviewOpen(true); }}>
+                  <Eye className="w-3.5 h-3.5" />
+                </Button>
+                {/* Feature 3: Copy ID */}
+                <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" title="Salin ID" onClick={() => handleCopyId(snippet.id)}>
+                  {copiedId === snippet.id ? <CheckCircle2 className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+                </Button>
                 <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => { setSelected(snippet); setEditForm({ title: snippet.title, description: snippet.description, language: snippet.language, tags: snippet.tags.join(", ") }); setEditOpen(true); }}>
                   <Pencil className="w-3.5 h-3.5" />
                 </Button>
@@ -847,19 +994,52 @@ function SnippetControlTab() {
         </div>
       )}
 
+      {/* Feature 2: Code Preview Modal */}
+      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+        <DialogContent className="sm:max-w-2xl glass-card max-h-[80vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="text-sm flex items-center gap-2">
+              <Code2 className="w-4 h-4 text-blue-400" />
+              {selected?.title}
+              <Badge variant="outline" className={cn("text-[10px] ml-1", statusColors[selected?.status || ""] || "")}>{selected?.status}</Badge>
+            </DialogTitle>
+            <DialogDescription className="text-xs">{selected?.language} · {selected?.authorEmail} · {selected?.viewCount ?? 0} views · {selected?.copyCount ?? 0} copies</DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-auto rounded-lg bg-zinc-950 border border-border/40 p-4">
+            <pre className="text-xs text-green-300 font-mono whitespace-pre-wrap break-all leading-relaxed">
+              {selected?.content || <span className="text-muted-foreground italic">Tidak ada konten</span>}
+            </pre>
+          </div>
+          <DialogFooter className="flex-shrink-0 pt-2">
+            <Button size="sm" variant="outline" onClick={() => { if (selected?.content) { navigator.clipboard.writeText(selected.content); toast({ title: "Kode disalin!" }); } }}>
+              <Copy className="w-3.5 h-3.5 mr-1.5" /> Salin Kode
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setPreviewOpen(false)}>Tutup</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent className="sm:max-w-sm glass-card">
           <DialogHeader><DialogTitle className="text-red-400">Hapus Snippet</DialogTitle><DialogDescription>"{selected?.title}" akan dihapus permanen.</DialogDescription></DialogHeader>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setDeleteOpen(false)}>Batal</Button>
-            <Button size="sm" variant="destructive" onClick={handleDelete} disabled={actionLoading}>{actionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Trash2 className="w-3.5 h-3.5 mr-1" />} Hapus</Button>
+            <Button size="sm" variant="destructive" onClick={handleDelete} disabled={!!actionLoading}>{actionLoading === "delete" ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Trash2 className="w-3.5 h-3.5 mr-1" />} Hapus</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="sm:max-w-md glass-card">
-          <DialogHeader><DialogTitle>Edit Metadata Snippet</DialogTitle><DialogDescription>ID: {selected?.id}</DialogDescription></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Edit Metadata Snippet</DialogTitle>
+            <DialogDescription className="text-xs flex items-center gap-1">
+              ID: <code className="font-mono text-blue-300 select-all">{selected?.id}</code>
+              <button type="button" onClick={() => selected && handleCopyId(selected.id)} className="text-muted-foreground hover:text-foreground ml-1">
+                {copiedId === selected?.id ? <CheckCircle2 className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+              </button>
+            </DialogDescription>
+          </DialogHeader>
           <div className="space-y-3">
             <Input placeholder="Judul" value={editForm.title} onChange={(e) => setEditForm((f) => ({ ...f, title: e.target.value }))} className="bg-background/50" />
             <Textarea placeholder="Deskripsi" value={editForm.description} onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))} className="bg-background/50 resize-none h-20" />
@@ -868,7 +1048,7 @@ function SnippetControlTab() {
           </div>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setEditOpen(false)}>Batal</Button>
-            <Button size="sm" onClick={handleEdit} disabled={actionLoading}>{actionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : "Simpan"}</Button>
+            <Button size="sm" onClick={handleEdit} disabled={!!actionLoading}>{actionLoading === "edit" ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : "Simpan"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

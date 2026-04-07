@@ -395,7 +395,7 @@ router.get("/admin/all-snippets", async (req: Request, res: Response) => {
       const where = status ? eq(snippetsTable.status, status as any) : undefined;
       const [snippets, [{ total }]] = await Promise.all([
         db.select().from(snippetsTable).where(where).orderBy(desc(snippetsTable.createdAt)).limit(limit).offset(offset),
-        db.select({ total: sum(snippetsTable.id) }).from(snippetsTable).where(where),
+        db.select({ total: count() }).from(snippetsTable).where(where),
       ]);
       res.json({
         data: snippets.map(s => ({ ...s, tags: s.tags ?? [], createdAt: s.createdAt.toISOString(), updatedAt: s.updatedAt.toISOString() })),
@@ -418,7 +418,7 @@ router.get("/admin/snippets", async (req: Request, res: Response) => {
       const where = status ? eq(snippetsTable.status, status as any) : undefined;
       const [snippets, [{ total }]] = await Promise.all([
         db.select().from(snippetsTable).where(where).orderBy(desc(snippetsTable.createdAt)).limit(limit).offset(offset),
-        db.select({ total: sum(snippetsTable.id) }).from(snippetsTable).where(where),
+        db.select({ total: count() }).from(snippetsTable).where(where),
       ]);
       res.json({
         data: snippets.map(s => ({ ...s, tags: s.tags ?? [], createdAt: s.createdAt.toISOString(), updatedAt: s.updatedAt.toISOString() })),
