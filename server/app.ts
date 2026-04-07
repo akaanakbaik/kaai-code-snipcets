@@ -37,7 +37,7 @@ app.use(
   }),
 );
 
-app.use(cookieParser());
+app.use(cookieParser(process.env.SESSION_SECRET || "kaai-fallback-secret-change-me"));
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 app.use(globalRateLimit);
