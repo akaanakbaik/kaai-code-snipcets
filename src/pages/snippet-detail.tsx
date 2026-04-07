@@ -81,7 +81,6 @@ function UnlockModal({
         return;
       }
       const token: string = json.token;
-      sessionStorage.setItem(`unlock_token_${snippetId}`, token);
       const snippetRes = await fetch(`${API_BASE}/api/snippets/${snippetId}`, {
         headers: { "X-Unlock-Token": token },
       });
@@ -334,17 +333,6 @@ export default function SnippetDetail() {
   const effectivelyLocked = isLocked && !lockIsDisabled;
   const displayCode = effectivelyLocked ? (unlockedCode ?? "") : (s?.code ?? "");
 
-  // Try restoring unlock token from sessionStorage
-  useEffect(() => {
-    if (!id || !isLocked || unlockedCode !== null) return;
-    const cached = sessionStorage.getItem(`unlock_token_${id}`);
-    if (!cached) return;
-    fetch(`${API_BASE}/api/snippets/${id}`, { headers: { "X-Unlock-Token": cached } })
-      .then((r) => r.json())
-      .then((d) => { if (d.code) setUnlockedCode(d.code); })
-      .catch(() => {});
-  }, [id, isLocked]);
-
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
   }, [id]);
@@ -540,18 +528,9 @@ export default function SnippetDetail() {
                 Snippet ini dilindungi dengan {s.lockType === "pin" ? "PIN" : "password"}.
               </p>
             </div>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <Button onClick={() => setShowUnlock(true)} className="gap-2">
-                <KeyRound className="w-4 h-4" /> Buka Kunci
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => setShowDisableLock(true)}
-                className="gap-2 border-amber-500/30 text-amber-400 hover:bg-amber-500/10 hover:text-amber-300"
-              >
-                <ShieldOff className="w-4 h-4" /> Matikan Kunci
-              </Button>
-            </div>
+            <Button onClick={() => setShowUnlock(true)} className="gap-2">
+              <KeyRound className="w-4 h-4" /> Buka Kunci
+            </Button>
           </motion.div>
         ) : (
           <div className="rounded-xl border border-border/40 overflow-hidden bg-[#1e1e1e] shadow-xl">

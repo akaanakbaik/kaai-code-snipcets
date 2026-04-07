@@ -1026,11 +1026,11 @@ function SnippetControlTab() {
           </DialogHeader>
           <div className="flex-1 overflow-auto rounded-lg bg-zinc-950 border border-border/40 p-4">
             <pre className="text-xs text-green-300 font-mono whitespace-pre-wrap break-all leading-relaxed">
-              {selected?.content || <span className="text-muted-foreground italic">Tidak ada konten</span>}
+              {selected?.code || <span className="text-muted-foreground italic">Tidak ada konten</span>}
             </pre>
           </div>
           <DialogFooter className="flex-shrink-0 pt-2">
-            <Button size="sm" variant="outline" onClick={() => { if (selected?.content) { navigator.clipboard.writeText(selected.content); toast({ title: "Kode disalin!" }); } }}>
+            <Button size="sm" variant="outline" onClick={() => { if (selected?.code) { navigator.clipboard.writeText(selected.code); toast({ title: "Kode disalin!" }); } }}>
               <Copy className="w-3.5 h-3.5 mr-1.5" /> Salin Kode
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setPreviewOpen(false)}>Tutup</Button>

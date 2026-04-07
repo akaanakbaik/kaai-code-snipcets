@@ -23,11 +23,21 @@ const ADMIN_EMAILS: Record<string, string> = {
 };
 
 function generateId(): string {
-  const digits = Array.from({ length: 5 }, () => Math.floor(Math.random() * 10)).join("");
-  const letters = Array.from({ length: 5 }, () =>
-    String.fromCharCode(65 + Math.floor(Math.random() * 26))
-  ).join("");
-  return digits + letters;
+  const DIGITS = "0123456789";
+  const LETTERS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const SYMBOLS = "@_-+=~";
+  const pick = (pool: string) => pool[Math.floor(Math.random() * pool.length)];
+  const chars = [
+    ...Array.from({ length: 4 }, () => pick(DIGITS)),
+    ...Array.from({ length: 4 }, () => pick(LETTERS)),
+    pick(SYMBOLS),
+    pick(SYMBOLS),
+  ];
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join("");
 }
 
 function getClientIp(req: Request): string {
