@@ -1,5 +1,5 @@
 {
-  "buildCommand": "node scripts/build-server.mjs",
+  "buildCommand": "node scripts/build-server.mjs && npx vite build",
   "outputDirectory": "dist",
   "installCommand": "npm install --include=dev",
   "framework": null,
