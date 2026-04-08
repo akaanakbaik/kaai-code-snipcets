@@ -6,12 +6,4 @@
     <priority>1.0</priority>
   </url>
 
-  <url>
-    <loc>https://codes-snippet.kaai.my.id/upload</loc>
-  </url>
-
-  <url>
-    <loc>https://codes-snippet.kaai.my.id/stats</loc>
-  </url>
-
 </urlset>
