@@ -63,6 +63,8 @@ __export(schema_exports, {
   ipBansTable: () => ipBansTable,
   loginAttemptsTable: () => loginAttemptsTable,
   requestLogsTable: () => requestLogsTable,
+  snippetDisableLockOtpsTable: () => snippetDisableLockOtpsTable,
+  snippetLockAttemptsTable: () => snippetLockAttemptsTable,
   snippetStatusEnum: () => snippetStatusEnum,
   snippetsTable: () => snippetsTable
 });
@@ -86,6 +88,11 @@ var snippetsTable = (0, import_pg_core.pgTable)("snippets", {
   rejectReason: (0, import_pg_core.text)("reject_reason"),
   viewCount: (0, import_pg_core.integer)("view_count").notNull().default(0),
   copyCount: (0, import_pg_core.integer)("copy_count").notNull().default(0),
+  isLocked: (0, import_pg_core.boolean)("is_locked").notNull().default(false),
+  lockType: (0, import_pg_core.text)("lock_type"),
+  lockHash: (0, import_pg_core.text)("lock_hash"),
+  lockSalt: (0, import_pg_core.text)("lock_salt"),
+  lockDisabledAt: (0, import_pg_core.timestamp)("lock_disabled_at", { withTimezone: true }),
   createdAt: (0, import_pg_core.timestamp)("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: (0, import_pg_core.timestamp)("updated_at", { withTimezone: true }).notNull().defaultNow()
 });
@@ -190,6 +197,23 @@ var apiKeyUsageTable = (0, import_pg_core.pgTable)("api_key_usage", {
   requestsToday: (0, import_pg_core.integer)("requests_today").notNull().default(0),
   requestsMonth: (0, import_pg_core.integer)("requests_month").notNull().default(0),
   updatedAt: (0, import_pg_core.timestamp)("updated_at").notNull().defaultNow()
+});
+var snippetLockAttemptsTable = (0, import_pg_core.pgTable)("snippet_lock_attempts", {
+  id: (0, import_pg_core.text)("id").primaryKey(),
+  snippetId: (0, import_pg_core.text)("snippet_id").notNull(),
+  ipAddress: (0, import_pg_core.text)("ip_address").notNull(),
+  attemptCount: (0, import_pg_core.integer)("attempt_count").notNull().default(0),
+  lastAttemptAt: (0, import_pg_core.timestamp)("last_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  bannedUntil: (0, import_pg_core.timestamp)("banned_until", { withTimezone: true })
+});
+var snippetDisableLockOtpsTable = (0, import_pg_core.pgTable)("snippet_disable_lock_otps", {
+  id: (0, import_pg_core.text)("id").primaryKey(),
+  snippetId: (0, import_pg_core.text)("snippet_id").notNull(),
+  authorEmail: (0, import_pg_core.text)("author_email").notNull(),
+  otp: (0, import_pg_core.text)("otp").notNull(),
+  expiresAt: (0, import_pg_core.timestamp)("expires_at", { withTimezone: true }).notNull(),
+  used: (0, import_pg_core.boolean)("used").notNull().default(false),
+  createdAt: (0, import_pg_core.timestamp)("created_at", { withTimezone: true }).notNull().defaultNow()
 });
 
 // server/lib/db.ts
@@ -313,6 +337,7 @@ var health_default = router;
 // server/routes/snippets.ts
 var import_express2 = require("express");
 var import_drizzle_orm = require("drizzle-orm");
+var import_node_crypto = __toESM(require("node:crypto"), 1);
 var import_zod2 = require("zod");
 
 // server/lib/mailer.ts
@@ -456,6 +481,29 @@ async function sendBroadcastEmail(to, subject, message) {
     )
   );
 }
+async function sendDisableLockOtpEmail(to, snippetTitle, otp) {
+  const t = getTransporter();
+  await t.sendMail({
+    from: `"Kaai Code Snippet" <${process.env.GMAIL_USER}>`,
+    to,
+    subject: `Kode OTP Matikan Kunci \u2014 ${snippetTitle}`,
+    html: `
+      <div style="${BASE_STYLE}">
+        <h2 style="color:#f59e0b;margin-top:0">\u{1F513} Matikan Kunci Snippet</h2>
+        <p>Kamu meminta untuk menonaktifkan kunci pada snippet:</p>
+        <p style="background:#1e2a3a;border:1px solid #2d3f55;border-radius:8px;padding:12px;font-weight:bold;color:#e2e8f0">${snippetTitle}</p>
+        <p>Masukkan kode OTP berikut untuk mengonfirmasi:</p>
+        <div style="background:#1e2a3a;border:2px solid #f59e0b;border-radius:8px;padding:20px;text-align:center;margin:20px 0">
+          <span style="font-size:48px;font-weight:bold;letter-spacing:12px;color:#f59e0b;font-family:monospace">${otp}</span>
+        </div>
+        <p style="color:#ef4444;font-size:13px;font-weight:bold">\u26A0\uFE0F Peringatan: Tindakan ini bersifat permanen dan tidak bisa dibatalkan!</p>
+        <p style="color:#94a3b8;font-size:13px">Kode ini berlaku selama <strong>3 menit</strong> dan hanya bisa digunakan sekali. Jangan bagikan ke siapapun.</p>
+        <p style="color:#94a3b8;font-size:13px">Jika kamu tidak meminta ini, abaikan email ini.</p>
+        ${FOOTER}
+      </div>
+    `
+  });
+}
 async function sendTestEmail(to) {
   const t = getTransporter();
   await t.sendMail({
@@ -474,6 +522,10 @@ async function sendTestEmail(to) {
 
 // server/routes/snippets.ts
 var router2 = (0, import_express2.Router)();
+var UNLOCK_SECRET = process.env.SNIPPET_UNLOCK_SECRET ?? "kaai-unlock-s3cr3t-2k25-xR9pQm7z";
+var MAX_LOCK_ATTEMPTS = 5;
+var LOCK_BAN_MS = 15 * 60 * 1e3;
+var UNLOCK_TOKEN_TTL_MS = 60 * 60 * 1e3;
 var ADMIN_EMAILS = {
   "akaanakbaik17@proton.me": "aka",
   "yaudahpakeaja6@gmail.com": "youso",
@@ -481,21 +533,70 @@ var ADMIN_EMAILS = {
   "clpmadang@gmail.com": "udin"
 };
 function generateId() {
-  const digits = Array.from({ length: 5 }, () => Math.floor(Math.random() * 10)).join("");
-  const letters = Array.from(
-    { length: 5 },
-    () => String.fromCharCode(65 + Math.floor(Math.random() * 26))
-  ).join("");
-  return digits + letters;
+  const DIGITS = "0123456789";
+  const LETTERS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const SYMBOLS = "@_-+=~";
+  const pick = (pool2) => pool2[Math.floor(Math.random() * pool2.length)];
+  const chars = [
+    ...Array.from({ length: 4 }, () => pick(DIGITS)),
+    ...Array.from({ length: 4 }, () => pick(LETTERS)),
+    pick(SYMBOLS),
+    pick(SYMBOLS)
+  ];
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join("");
 }
-function formatSnippet(snippet, hideEmail = true) {
+function getClientIp(req) {
+  return req.headers["cf-connecting-ip"] || req.headers["x-real-ip"] || req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket?.remoteAddress || "unknown";
+}
+function hashPassword(password, salt) {
+  return import_node_crypto.default.pbkdf2Sync(password, salt, 1e5, 64, "sha512").toString("hex");
+}
+function generateUnlockToken(snippetId) {
+  const expiresAt = Date.now() + UNLOCK_TOKEN_TTL_MS;
+  const payload = `${snippetId}:${expiresAt}`;
+  const sig = import_node_crypto.default.createHmac("sha256", UNLOCK_SECRET).update(payload).digest("hex");
+  return Buffer.from(payload).toString("base64url") + "." + sig;
+}
+function verifyUnlockToken(token, snippetId) {
+  try {
+    const [b64, sig] = token.split(".");
+    if (!b64 || !sig) return false;
+    const payload = Buffer.from(b64, "base64url").toString();
+    const [tokenSnippetId, expiresAtStr] = payload.split(":");
+    if (tokenSnippetId !== snippetId) return false;
+    const expiresAt = Number(expiresAtStr);
+    if (Date.now() > expiresAt) return false;
+    const expectedSig = import_node_crypto.default.createHmac("sha256", UNLOCK_SECRET).update(payload).digest("hex");
+    return import_node_crypto.default.timingSafeEqual(Buffer.from(sig, "hex"), Buffer.from(expectedSig, "hex"));
+  } catch {
+    return false;
+  }
+}
+function formatSnippet(snippet, options = {}) {
+  const { hideEmail = true, includeCode = true } = options;
   const result = {
-    ...snippet,
+    id: snippet.id,
+    title: snippet.title,
+    description: snippet.description,
+    language: snippet.language,
     tags: snippet.tags ?? [],
+    authorName: snippet.authorName,
+    status: snippet.status,
+    rejectReason: snippet.rejectReason,
+    viewCount: snippet.viewCount,
+    copyCount: snippet.copyCount,
+    isLocked: snippet.isLocked,
+    lockType: snippet.isLocked ? snippet.lockType ?? null : null,
+    lockDisabledAt: snippet.lockDisabledAt ? snippet.lockDisabledAt.toISOString() : null,
     createdAt: snippet.createdAt.toISOString(),
     updatedAt: snippet.updatedAt.toISOString()
   };
-  if (hideEmail) delete result.authorEmail;
+  if (!hideEmail) result.authorEmail = snippet.authorEmail;
+  if (includeCode) result.code = snippet.code;
   return result;
 }
 async function sendToBot(snippet) {
@@ -545,11 +646,14 @@ var CreateSnippetBody = import_zod2.z.object({
   tags: import_zod2.z.array(import_zod2.z.string()).max(10).default([]),
   code: import_zod2.z.string().min(1).max(5e4),
   authorName: import_zod2.z.string().min(1).max(100),
-  authorEmail: import_zod2.z.string().email().max(200)
+  authorEmail: import_zod2.z.string().email().max(200),
+  isLocked: import_zod2.z.boolean().optional().default(false),
+  lockType: import_zod2.z.enum(["password", "pin"]).optional(),
+  lockPassword: import_zod2.z.string().min(4).max(100).optional()
 });
 var ListSnippetsQuery = import_zod2.z.object({
   page: import_zod2.z.coerce.number().min(1).default(1),
-  limit: import_zod2.z.coerce.number().min(1).max(50).default(12),
+  limit: import_zod2.z.coerce.number().min(1).max(100).default(10),
   q: import_zod2.z.string().optional(),
   search: import_zod2.z.string().optional(),
   language: import_zod2.z.string().optional(),
@@ -599,6 +703,83 @@ router2.post("/snippets/:id/copy", async (req, res) => {
     res.json({ success: false });
   }
 });
+router2.post("/snippets/:id/unlock", async (req, res) => {
+  const { id } = req.params;
+  const { password } = req.body ?? {};
+  const ip = getClientIp(req);
+  if (!password || typeof password !== "string" || password.length > 200) {
+    res.status(400).json({ error: "VALIDATION_ERROR", message: "Password/PIN diperlukan" });
+    return;
+  }
+  try {
+    const [attempt] = await db.select().from(snippetLockAttemptsTable).where((0, import_drizzle_orm.and)((0, import_drizzle_orm.eq)(snippetLockAttemptsTable.snippetId, id), (0, import_drizzle_orm.eq)(snippetLockAttemptsTable.ipAddress, ip))).limit(1);
+    if (attempt) {
+      if (attempt.bannedUntil && attempt.bannedUntil > /* @__PURE__ */ new Date()) {
+        const remainSec = Math.ceil((attempt.bannedUntil.getTime() - Date.now()) / 1e3);
+        const remainMin = Math.ceil(remainSec / 60);
+        res.status(429).json({
+          error: "RATE_LIMITED",
+          message: `Terlalu banyak percobaan. Coba lagi dalam ${remainMin} menit.`,
+          retryAfter: attempt.bannedUntil.toISOString()
+        });
+        return;
+      }
+    }
+    const [snippet] = await db.select().from(snippetsTable).where((0, import_drizzle_orm.and)((0, import_drizzle_orm.eq)(snippetsTable.id, id), (0, import_drizzle_orm.eq)(snippetsTable.status, "approved"))).limit(1);
+    if (!snippet) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Snippet tidak ditemukan" });
+      return;
+    }
+    if (!snippet.isLocked || !snippet.lockHash || !snippet.lockSalt) {
+      res.status(400).json({ error: "NOT_LOCKED", message: "Snippet ini tidak dikunci" });
+      return;
+    }
+    const inputHash = hashPassword(password, snippet.lockSalt);
+    const isCorrect = import_node_crypto.default.timingSafeEqual(
+      Buffer.from(inputHash, "hex"),
+      Buffer.from(snippet.lockHash, "hex")
+    );
+    if (!isCorrect) {
+      const newCount = (attempt?.attemptCount ?? 0) + 1;
+      let bannedUntil = null;
+      if (newCount >= MAX_LOCK_ATTEMPTS) {
+        const multiplier = Math.pow(2, Math.floor(newCount / MAX_LOCK_ATTEMPTS) - 1);
+        bannedUntil = new Date(Date.now() + LOCK_BAN_MS * Math.min(multiplier, 64));
+      }
+      if (attempt) {
+        await db.update(snippetLockAttemptsTable).set({
+          attemptCount: newCount,
+          lastAttemptAt: /* @__PURE__ */ new Date(),
+          bannedUntil: bannedUntil ?? attempt.bannedUntil
+        }).where((0, import_drizzle_orm.eq)(snippetLockAttemptsTable.id, attempt.id));
+      } else {
+        await db.insert(snippetLockAttemptsTable).values({
+          id: import_node_crypto.default.randomUUID(),
+          snippetId: id,
+          ipAddress: ip,
+          attemptCount: 1,
+          lastAttemptAt: /* @__PURE__ */ new Date(),
+          bannedUntil
+        });
+      }
+      const attemptsLeft = Math.max(0, MAX_LOCK_ATTEMPTS - newCount % MAX_LOCK_ATTEMPTS);
+      res.status(401).json({
+        error: "WRONG_PASSWORD",
+        message: `Password/PIN salah. ${attemptsLeft > 0 ? `Sisa ${attemptsLeft} percobaan sebelum diblokir sementara.` : "Akses diblokir sementara."}`,
+        attemptsLeft
+      });
+      return;
+    }
+    if (attempt) {
+      await db.delete(snippetLockAttemptsTable).where((0, import_drizzle_orm.eq)(snippetLockAttemptsTable.id, attempt.id));
+    }
+    const token = generateUnlockToken(id);
+    res.json({ success: true, token, expiresIn: UNLOCK_TOKEN_TTL_MS / 1e3 });
+  } catch (err) {
+    logger.error(`[unlock] Error: ${err.message}`);
+    res.status(500).json({ error: "SERVER_ERROR", message: "Terjadi kesalahan server" });
+  }
+});
 router2.get("/snippets", async (req, res) => {
   const parsed = ListSnippetsQuery.safeParse(req.query);
   if (!parsed.success) {
@@ -622,7 +803,6 @@ router2.get("/snippets", async (req, res) => {
       conditions.push(
         (0, import_drizzle_orm.or)(
           (0, import_drizzle_orm.ilike)(snippetsTable.title, `%${searchQuery}%`),
-          (0, import_drizzle_orm.ilike)(snippetsTable.code, `%${searchQuery}%`),
           (0, import_drizzle_orm.ilike)(snippetsTable.description, `%${searchQuery}%`),
           (0, import_drizzle_orm.ilike)(snippetsTable.authorName, `%${searchQuery}%`),
           import_drizzle_orm.sql`EXISTS (SELECT 1 FROM unnest(${snippetsTable.tags}) AS t WHERE t ILIKE ${"%" + searchQuery + "%"})`
@@ -637,9 +817,11 @@ router2.get("/snippets", async (req, res) => {
       db.select().from(snippetsTable).where(where).orderBy(...orderBy).limit(limit).offset(offset),
       db.select({ total: (0, import_drizzle_orm.count)() }).from(snippetsTable).where(where)
     ]);
+    const totalNum = Number(total);
     res.json({
-      data: snippets.map((s) => formatSnippet(s)),
-      pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) }
+      data: snippets.map((s) => formatSnippet(s, { includeCode: !s.isLocked })),
+      pagination: { page, limit, total: totalNum, totalPages: Math.ceil(totalNum / limit) },
+      totalPages: Math.ceil(totalNum / limit)
     });
   } catch {
     res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch snippets" });
@@ -651,16 +833,48 @@ router2.post("/snippets", async (req, res) => {
     res.status(400).json({ error: "VALIDATION_ERROR", issues: parsed.error.issues });
     return;
   }
+  const { isLocked, lockType, lockPassword, ...rest } = parsed.data;
+  if (isLocked) {
+    if (!lockType) {
+      res.status(400).json({ error: "VALIDATION_ERROR", message: "lockType diperlukan jika snippet dikunci" });
+      return;
+    }
+    if (!lockPassword || lockPassword.length < 4) {
+      res.status(400).json({ error: "VALIDATION_ERROR", message: "Password/PIN minimal 4 karakter" });
+      return;
+    }
+    if (lockType === "pin" && !/^\d+$/.test(lockPassword)) {
+      res.status(400).json({ error: "VALIDATION_ERROR", message: "PIN hanya boleh berisi angka" });
+      return;
+    }
+  }
   const id = generateId();
   try {
-    const [snippet] = await db.insert(snippetsTable).values({ id, ...parsed.data, status: "pending", createdAt: /* @__PURE__ */ new Date(), updatedAt: /* @__PURE__ */ new Date() }).returning();
+    let lockHash = null;
+    let lockSalt = null;
+    if (isLocked && lockPassword) {
+      lockSalt = import_node_crypto.default.randomBytes(32).toString("hex");
+      lockHash = hashPassword(lockPassword, lockSalt);
+    }
+    const [snippet] = await db.insert(snippetsTable).values({
+      id,
+      ...rest,
+      isLocked: isLocked ?? false,
+      lockType: isLocked ? lockType ?? null : null,
+      lockHash,
+      lockSalt,
+      status: "pending",
+      createdAt: /* @__PURE__ */ new Date(),
+      updatedAt: /* @__PURE__ */ new Date()
+    }).returning();
     const full = { ...snippet, authorEmail: snippet.authorEmail };
     sendToBot(full).catch(() => {
     });
     notifyAdmins(snippet.title, snippet.id, snippet.authorName).catch(() => {
     });
     res.status(201).json(formatSnippet(snippet));
-  } catch {
+  } catch (err) {
+    logger.error(`[snippets] Create error: ${err.message}`);
     res.status(500).json({ error: "SERVER_ERROR", message: "Failed to create snippet" });
   }
 });
@@ -671,10 +885,95 @@ router2.get("/snippets/:id", async (req, res) => {
       res.status(404).json({ error: "NOT_FOUND", message: "Snippet not found" });
       return;
     }
+    if (snippet.isLocked) {
+      const tokenHeader = req.headers["x-unlock-token"];
+      const includeCode = !!tokenHeader && verifyUnlockToken(tokenHeader, snippet.id);
+      res.json(formatSnippet(snippet, { includeCode }));
+      return;
+    }
     res.json(formatSnippet(snippet));
   } catch {
     res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch snippet" });
   }
+});
+router2.post("/snippets/:id/disable-lock/request", async (req, res) => {
+  const { id } = req.params;
+  const { authorEmail } = req.body ?? {};
+  if (!authorEmail || typeof authorEmail !== "string") {
+    res.status(400).json({ error: "VALIDATION_ERROR", message: "Email penulis diperlukan" });
+    return;
+  }
+  const [snippet] = await db.select().from(snippetsTable).where((0, import_drizzle_orm.eq)(snippetsTable.id, id)).limit(1);
+  if (!snippet) {
+    res.status(404).json({ error: "NOT_FOUND", message: "Snippet tidak ditemukan" });
+    return;
+  }
+  if (!snippet.isLocked) {
+    res.status(400).json({ error: "NOT_LOCKED", message: "Snippet ini tidak dikunci" });
+    return;
+  }
+  if (snippet.lockDisabledAt) {
+    res.status(400).json({ error: "ALREADY_DISABLED", message: "Kunci sudah dimatikan sebelumnya" });
+    return;
+  }
+  if (snippet.authorEmail.toLowerCase() !== authorEmail.trim().toLowerCase()) {
+    res.status(403).json({ error: "WRONG_EMAIL", message: "Email tidak sesuai dengan penulis snippet" });
+    return;
+  }
+  await db.update(snippetDisableLockOtpsTable).set({ used: true }).where((0, import_drizzle_orm.and)((0, import_drizzle_orm.eq)(snippetDisableLockOtpsTable.snippetId, id), (0, import_drizzle_orm.eq)(snippetDisableLockOtpsTable.used, false)));
+  const otp = String(Math.floor(100 + Math.random() * 900));
+  const expiresAt = new Date(Date.now() + 3 * 60 * 1e3);
+  await db.insert(snippetDisableLockOtpsTable).values({
+    id: import_node_crypto.default.randomUUID(),
+    snippetId: id,
+    authorEmail: snippet.authorEmail,
+    otp,
+    expiresAt,
+    used: false
+  });
+  try {
+    await sendDisableLockOtpEmail(snippet.authorEmail, snippet.title, otp);
+  } catch (e) {
+    logger.error(`[disable-lock] Failed to send OTP email: ${e.message}`);
+    res.status(500).json({ error: "EMAIL_FAILED", message: "Gagal mengirim email OTP. Coba lagi." });
+    return;
+  }
+  res.json({ success: true, message: "OTP telah dikirim ke email penulis" });
+});
+router2.post("/snippets/:id/disable-lock/verify", async (req, res) => {
+  const { id } = req.params;
+  const { otp } = req.body ?? {};
+  if (!otp) {
+    res.status(400).json({ error: "VALIDATION_ERROR", message: "OTP diperlukan" });
+    return;
+  }
+  const [snippet] = await db.select().from(snippetsTable).where((0, import_drizzle_orm.eq)(snippetsTable.id, id)).limit(1);
+  if (!snippet) {
+    res.status(404).json({ error: "NOT_FOUND", message: "Snippet tidak ditemukan" });
+    return;
+  }
+  if (snippet.lockDisabledAt) {
+    res.status(400).json({ error: "ALREADY_DISABLED", message: "Kunci sudah dimatikan sebelumnya" });
+    return;
+  }
+  const [otpRecord] = await db.select().from(snippetDisableLockOtpsTable).where((0, import_drizzle_orm.and)((0, import_drizzle_orm.eq)(snippetDisableLockOtpsTable.snippetId, id), (0, import_drizzle_orm.eq)(snippetDisableLockOtpsTable.used, false))).orderBy((0, import_drizzle_orm.desc)(snippetDisableLockOtpsTable.createdAt)).limit(1);
+  if (!otpRecord) {
+    res.status(400).json({ error: "NO_OTP", message: "Tidak ada OTP aktif. Minta OTP baru." });
+    return;
+  }
+  if (/* @__PURE__ */ new Date() > otpRecord.expiresAt) {
+    await db.update(snippetDisableLockOtpsTable).set({ used: true }).where((0, import_drizzle_orm.eq)(snippetDisableLockOtpsTable.id, otpRecord.id));
+    res.status(400).json({ error: "OTP_EXPIRED", message: "OTP sudah kedaluwarsa. Minta OTP baru." });
+    return;
+  }
+  if (otpRecord.otp !== String(otp).trim()) {
+    res.status(400).json({ error: "WRONG_OTP", message: "Kode OTP salah" });
+    return;
+  }
+  await db.update(snippetDisableLockOtpsTable).set({ used: true }).where((0, import_drizzle_orm.eq)(snippetDisableLockOtpsTable.id, otpRecord.id));
+  const now = /* @__PURE__ */ new Date();
+  const [updated] = await db.update(snippetsTable).set({ lockDisabledAt: now, updatedAt: now }).where((0, import_drizzle_orm.eq)(snippetsTable.id, id)).returning();
+  res.json({ success: true, message: "Kunci berhasil dimatikan secara permanen", snippet: formatSnippet(updated) });
 });
 router2.post("/snippets/:id/approve", async (req, res) => {
   const secret = process.env.VITE_WEBHOOK_SECRET;
@@ -764,12 +1063,12 @@ var stats_default = router3;
 // server/routes/admin.ts
 var import_express4 = require("express");
 var import_drizzle_orm5 = require("drizzle-orm");
-var import_node_crypto2 = __toESM(require("node:crypto"), 1);
+var import_node_crypto3 = __toESM(require("node:crypto"), 1);
 
 // server/middleware/security.ts
 var import_express_rate_limit = __toESM(require("express-rate-limit"), 1);
 var import_drizzle_orm3 = require("drizzle-orm");
-function getClientIp(req) {
+function getClientIp2(req) {
   return req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
 }
 var globalRateLimit = (0, import_express_rate_limit.default)({
@@ -778,7 +1077,7 @@ var globalRateLimit = (0, import_express_rate_limit.default)({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "RATE_LIMITED", message: "Too many requests. Please slow down." },
-  keyGenerator: (req) => getClientIp(req)
+  keyGenerator: (req) => getClientIp2(req)
 });
 var adminLoginRateLimit = (0, import_express_rate_limit.default)({
   windowMs: 60 * 1e3,
@@ -786,7 +1085,7 @@ var adminLoginRateLimit = (0, import_express_rate_limit.default)({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "RATE_LIMITED", message: "Too many login attempts. Try again later." },
-  keyGenerator: (req) => getClientIp(req)
+  keyGenerator: (req) => getClientIp2(req)
 });
 function securityHeaders(req, res, next) {
   res.removeHeader("X-Powered-By");
@@ -829,14 +1128,14 @@ function safeErrorHandler(err, req, res, _next) {
 
 // server/routes/api-keys.ts
 var import_drizzle_orm4 = require("drizzle-orm");
-var import_node_crypto = __toESM(require("node:crypto"), 1);
+var import_node_crypto2 = __toESM(require("node:crypto"), 1);
 function hashKey(raw) {
-  return import_node_crypto.default.createHash("sha256").update(raw).digest("hex");
+  return import_node_crypto2.default.createHash("sha256").update(raw).digest("hex");
 }
 function generateRawKey() {
-  const digits = String(1e4 + import_node_crypto.default.randomInt(9e4));
+  const digits = String(1e4 + import_node_crypto2.default.randomInt(9e4));
   const alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  const letters = Array.from({ length: 5 }, () => alpha[import_node_crypto.default.randomInt(26)]).join("");
+  const letters = Array.from({ length: 5 }, () => alpha[import_node_crypto2.default.randomInt(26)]).join("");
   return `${digits}${letters}`;
 }
 function validateCustomKey(raw) {
@@ -893,7 +1192,7 @@ async function createApiKey(req, res) {
   const keyPrefix = rawKey.slice(0, 10);
   try {
     const [created] = await db.insert(apiKeysTable).values({
-      id: import_node_crypto.default.randomUUID(),
+      id: import_node_crypto2.default.randomUUID(),
       key: hashed,
       keyPrefix,
       name: name.trim(),
@@ -986,7 +1285,7 @@ async function addIpWhitelist(req, res) {
     return;
   }
   try {
-    const [created] = await db.insert(adminIpWhitelistTable).values({ id: import_node_crypto.default.randomUUID(), email, ipAddress, label: label ?? null, isActive: true, createdAt: /* @__PURE__ */ new Date() }).returning();
+    const [created] = await db.insert(adminIpWhitelistTable).values({ id: import_node_crypto2.default.randomUUID(), email, ipAddress, label: label ?? null, isActive: true, createdAt: /* @__PURE__ */ new Date() }).returning();
     res.status(201).json({ ...created, createdAt: created.createdAt.toISOString() });
   } catch {
     res.status(500).json({ error: "SERVER_ERROR", message: "Failed to add IP" });
@@ -1059,7 +1358,7 @@ function setSessionCookie(res, sessionId, expiresAt) {
   });
 }
 function generateOtp() {
-  return String(1e4 + import_node_crypto2.default.randomInt(9e4));
+  return String(1e4 + import_node_crypto3.default.randomInt(9e4));
 }
 function sanitizeEmail(email) {
   return email.toLowerCase().trim().replace(/[^a-z0-9@._+-]/g, "");
@@ -1118,13 +1417,13 @@ async function recordFailedAttempt(ip, email) {
     if (existing) {
       await db.update(loginAttemptsTable).set({ attemptCount: count4, lastAttemptAt: /* @__PURE__ */ new Date() }).where((0, import_drizzle_orm5.eq)(loginAttemptsTable.id, existing.id));
     } else {
-      await db.insert(loginAttemptsTable).values({ id: import_node_crypto2.default.randomUUID(), ipAddress: ip, email, attemptCount: count4, lastAttemptAt: /* @__PURE__ */ new Date() });
+      await db.insert(loginAttemptsTable).values({ id: import_node_crypto3.default.randomUUID(), ipAddress: ip, email, attemptCount: count4, lastAttemptAt: /* @__PURE__ */ new Date() });
     }
     if (count4 >= MAX_FAILED_ATTEMPTS_BEFORE_BAN) {
       const bannedUntil = new Date(Date.now() + IP_BAN_DURATION_MS);
-      await db.insert(ipBansTable).values({ id: import_node_crypto2.default.randomUUID(), ipAddress: ip, bannedUntil, reason: "Too many failed login attempts", createdAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: ipBansTable.ipAddress, set: { bannedUntil } });
+      await db.insert(ipBansTable).values({ id: import_node_crypto3.default.randomUUID(), ipAddress: ip, bannedUntil, reason: "Too many failed login attempts", createdAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: ipBansTable.ipAddress, set: { bannedUntil } });
       const emailBannedUntil = new Date(Date.now() + EMAIL_BAN_DURATION_MS);
-      await db.insert(emailBansTable).values({ id: import_node_crypto2.default.randomUUID(), email, bannedUntil: emailBannedUntil, reason: "Too many failed login attempts", createdAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: emailBansTable.email, set: { bannedUntil: emailBannedUntil } });
+      await db.insert(emailBansTable).values({ id: import_node_crypto3.default.randomUUID(), email, bannedUntil: emailBannedUntil, reason: "Too many failed login attempts", createdAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: emailBansTable.email, set: { bannedUntil: emailBannedUntil } });
     }
   } catch {
   }
@@ -1154,7 +1453,7 @@ async function handleRequestOtp(req, res) {
     return;
   }
   const email = sanitizeEmail(raw);
-  const ip = getClientIp(req);
+  const ip = getClientIp2(req);
   const ipBanMsg = await checkIpBan(ip);
   if (ipBanMsg) {
     res.status(403).json({ error: "IP_BANNED", message: ipBanMsg });
@@ -1175,7 +1474,7 @@ async function handleRequestOtp(req, res) {
   try {
     await db.delete(adminOtpsTable).where((0, import_drizzle_orm5.eq)(adminOtpsTable.email, email));
     await db.insert(adminOtpsTable).values({
-      id: import_node_crypto2.default.randomUUID(),
+      id: import_node_crypto3.default.randomUUID(),
       email,
       otp,
       used: false,
@@ -1209,7 +1508,7 @@ async function handleVerifyOtp(req, res) {
   }
   const email = sanitizeEmail(raw);
   const otpClean = String(otpInput).replace(/\D/g, "").trim();
-  const ip = getClientIp(req);
+  const ip = getClientIp2(req);
   const ipBanMsg = await checkIpBan(ip);
   if (ipBanMsg) {
     res.status(403).json({ error: "IP_BANNED", message: ipBanMsg });
@@ -1248,7 +1547,7 @@ async function handleVerifyOtp(req, res) {
     }
     await db.update(adminOtpsTable).set({ used: true }).where((0, import_drizzle_orm5.eq)(adminOtpsTable.id, latestOtp.id));
     await resetFailedAttempts(ip, email);
-    const sessionId = import_node_crypto2.default.randomUUID();
+    const sessionId = import_node_crypto3.default.randomUUID();
     const expiresAt = new Date(Date.now() + SESSION_DURATION_MS);
     await db.insert(adminSessionsTable).values({
       id: sessionId,
@@ -1286,11 +1585,25 @@ router4.get("/admin/auth/me", async (req, res) => {
   }
   res.json({ email: session.email, expiresAt: session.expiresAt.toISOString() });
 });
+var SUPERADMIN_EMAIL = "akaanakbaik17@proton.me";
+function formatSnippetForAdmin(s, adminEmail) {
+  const isSuperAdmin = adminEmail === SUPERADMIN_EMAIL;
+  return {
+    ...s,
+    code: isSuperAdmin ? s.code : s.isLocked ? "[TERKUNCI - Hanya superadmin yang bisa melihat]" : s.code,
+    lockHash: void 0,
+    lockSalt: void 0,
+    tags: s.tags ?? [],
+    createdAt: s.createdAt.toISOString(),
+    updatedAt: s.updatedAt.toISOString()
+  };
+}
 router4.get("/admin/pending", async (req, res) => {
-  await requireAdminSession(req, res, async (_req, res2) => {
+  await requireAdminSession(req, res, async (req2, res2) => {
     try {
+      const adminEmail = req2.adminEmail ?? "";
       const snippets = await db.select().from(snippetsTable).where((0, import_drizzle_orm5.eq)(snippetsTable.status, "pending")).orderBy((0, import_drizzle_orm5.desc)(snippetsTable.createdAt)).limit(100);
-      res2.json({ data: snippets.map((s) => ({ ...s, tags: s.tags ?? [], createdAt: s.createdAt.toISOString(), updatedAt: s.updatedAt.toISOString() })) });
+      res2.json({ data: snippets.map((s) => formatSnippetForAdmin(s, adminEmail)) });
     } catch {
       res2.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch pending snippets" });
     }
@@ -1298,6 +1611,7 @@ router4.get("/admin/pending", async (req, res) => {
 });
 router4.get("/admin/all-snippets", async (req, res) => {
   await requireAdminSession(req, res, async (req2, res2) => {
+    const adminEmail = req2.adminEmail ?? "";
     const status = req2.query.status;
     const limit = Math.min(Number(req2.query.limit) || 50, 200);
     const page = Math.max(Number(req2.query.page) || 1, 1);
@@ -1309,7 +1623,7 @@ router4.get("/admin/all-snippets", async (req, res) => {
         db.select({ total: (0, import_drizzle_orm5.count)() }).from(snippetsTable).where(where)
       ]);
       res2.json({
-        data: snippets.map((s) => ({ ...s, tags: s.tags ?? [], createdAt: s.createdAt.toISOString(), updatedAt: s.updatedAt.toISOString() })),
+        data: snippets.map((s) => formatSnippetForAdmin(s, adminEmail)),
         pagination: { page, limit, total: Number(total ?? 0), totalPages: Math.ceil(Number(total ?? 0) / limit) }
       });
     } catch {
@@ -1319,6 +1633,7 @@ router4.get("/admin/all-snippets", async (req, res) => {
 });
 router4.get("/admin/snippets", async (req, res) => {
   await requireAdminSession(req, res, async (req2, res2) => {
+    const adminEmail = req2.adminEmail ?? "";
     const status = req2.query.status;
     const limit = Math.min(Number(req2.query.limit) || 50, 200);
     const page = Math.max(Number(req2.query.page) || 1, 1);
@@ -1330,7 +1645,7 @@ router4.get("/admin/snippets", async (req, res) => {
         db.select({ total: (0, import_drizzle_orm5.count)() }).from(snippetsTable).where(where)
       ]);
       res2.json({
-        data: snippets.map((s) => ({ ...s, tags: s.tags ?? [], createdAt: s.createdAt.toISOString(), updatedAt: s.updatedAt.toISOString() })),
+        data: snippets.map((s) => formatSnippetForAdmin(s, adminEmail)),
         pagination: { page, limit, total: Number(total ?? 0), totalPages: Math.ceil(Number(total ?? 0) / limit) }
       });
     } catch {
@@ -1437,7 +1752,7 @@ router4.post("/admin/ban-email", async (req, res) => {
     const sanitized = sanitizeEmail(email);
     const bannedUntil = new Date(Date.now() + (durationMs ?? 365 * 24 * 60 * 60 * 1e3));
     try {
-      await db.insert(emailBansTable).values({ id: import_node_crypto2.default.randomUUID(), email: sanitized, bannedUntil, reason: reason ?? "Diblokir oleh admin", createdAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: emailBansTable.email, set: { bannedUntil, reason: reason ?? "Diblokir oleh admin" } });
+      await db.insert(emailBansTable).values({ id: import_node_crypto3.default.randomUUID(), email: sanitized, bannedUntil, reason: reason ?? "Diblokir oleh admin", createdAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: emailBansTable.email, set: { bannedUntil, reason: reason ?? "Diblokir oleh admin" } });
       logger.info(`[admin] Email banned: ${sanitized}`);
       res2.json({ success: true, message: `Email ${sanitized} telah diblokir.` });
     } catch {
@@ -1478,17 +1793,20 @@ router4.delete("/admin/security/bans/email/:id", async (req, res) => {
 router4.get("/admin/analytics", async (req, res) => {
   await requireAdminSession(req, res, async (_req, res2) => {
     try {
-      const [snippetCounts, recentSnippets] = await Promise.all([
+      const [snippetCounts, recentSnippets, allSnippets] = await Promise.all([
+        db.select({ status: snippetsTable.status, total: (0, import_drizzle_orm5.count)() }).from(snippetsTable).groupBy(snippetsTable.status),
+        db.select({ createdAt: snippetsTable.createdAt }).from(snippetsTable).orderBy((0, import_drizzle_orm5.desc)(snippetsTable.createdAt)).limit(200),
         db.select({
-          status: snippetsTable.status,
-          total: (0, import_drizzle_orm5.count)()
-        }).from(snippetsTable).groupBy(snippetsTable.status),
-        db.select({ createdAt: snippetsTable.createdAt }).from(snippetsTable).orderBy((0, import_drizzle_orm5.desc)(snippetsTable.createdAt)).limit(200)
+          authorEmail: snippetsTable.authorEmail,
+          authorName: snippetsTable.authorName,
+          language: snippetsTable.language,
+          viewCount: snippetsTable.viewCount,
+          copyCount: snippetsTable.copyCount,
+          status: snippetsTable.status
+        }).from(snippetsTable)
       ]);
       const totals = {};
-      for (const row of snippetCounts) {
-        totals[row.status] = Number(row.total);
-      }
+      for (const row of snippetCounts) totals[row.status] = Number(row.total);
       const last14 = {};
       const now = /* @__PURE__ */ new Date();
       for (let i = 13; i >= 0; i--) {
@@ -1500,17 +1818,61 @@ router4.get("/admin/analytics", async (req, res) => {
         const day = s.createdAt.toISOString().slice(0, 10);
         if (day in last14) last14[day]++;
       }
-      const submissionsPerDay = Object.entries(last14).map(([date, count4]) => ({ date, count: count4 }));
+      const submissionsPerDay = Object.entries(last14).map(([date, cnt]) => ({ date, count: cnt }));
+      const authorMap = {};
+      for (const s of allSnippets) {
+        if (!authorMap[s.authorEmail]) {
+          authorMap[s.authorEmail] = { name: s.authorName, views: 0, copies: 0, snippetCount: 0, languages: {} };
+        }
+        authorMap[s.authorEmail].views += s.viewCount ?? 0;
+        authorMap[s.authorEmail].copies += s.copyCount ?? 0;
+        authorMap[s.authorEmail].snippetCount += 1;
+        authorMap[s.authorEmail].languages[s.language] = (authorMap[s.authorEmail].languages[s.language] ?? 0) + 1;
+      }
+      const topByEngagement = Object.entries(authorMap).map(([email, a]) => ({
+        email,
+        name: a.name,
+        score: a.views * 1 + a.copies * 2,
+        views: a.views,
+        copies: a.copies,
+        snippetCount: a.snippetCount,
+        topLanguage: Object.entries(a.languages).sort((x, y) => y[1] - x[1])[0]?.[0] ?? "other"
+      })).sort((a, b) => b.score - a.score).slice(0, 10);
+      const topBySnippets = Object.entries(authorMap).map(([email, a]) => ({
+        email,
+        name: a.name,
+        snippetCount: a.snippetCount,
+        topLanguage: Object.entries(a.languages).sort((x, y) => y[1] - x[1])[0]?.[0] ?? "other",
+        views: a.views,
+        copies: a.copies
+      })).sort((a, b) => b.snippetCount - a.snippetCount).slice(0, 10);
+      const langCount = {};
+      for (const s of allSnippets) {
+        langCount[s.language] = (langCount[s.language] ?? 0) + 1;
+      }
+      const topLanguages = Object.entries(langCount).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([language, cnt]) => ({ language, count: cnt }));
+      let totalViews = 0, totalCopies = 0;
+      for (const s of allSnippets) {
+        totalViews += s.viewCount ?? 0;
+        totalCopies += s.copyCount ?? 0;
+      }
       res2.json({
         totals: {
           total: (totals.pending ?? 0) + (totals.approved ?? 0) + (totals.rejected ?? 0),
           pending: totals.pending ?? 0,
           approved: totals.approved ?? 0,
-          rejected: totals.rejected ?? 0
+          rejected: totals.rejected ?? 0,
+          totalViews,
+          totalCopies,
+          totalAuthors: Object.keys(authorMap).length
         },
-        submissionsPerDay
+        submissionsPerDay,
+        topByEngagement,
+        topBySnippets,
+        topLanguages
       });
-    } catch {
+    } catch (err) {
+      logger.error(`[admin/analytics] ${err.message}`);
       res2.status(500).json({ error: "SERVER_ERROR" });
     }
   });
@@ -1543,7 +1905,7 @@ async function handleBroadcast(req, res, targetEmail) {
     }))
   );
   await db.insert(broadcastLogsTable).values({
-    id: import_node_crypto2.default.randomUUID(),
+    id: import_node_crypto3.default.randomUUID(),
     adminEmail,
     adminInitial: adminInitial ?? adminEmail[0]?.toUpperCase() ?? "A",
     targetEmail: targetEmail ?? null,
@@ -1633,7 +1995,7 @@ router5.use(stats_default);
 var routes_default = router5;
 
 // server/middleware/request-logger.ts
-var import_node_crypto3 = __toESM(require("node:crypto"), 1);
+var import_node_crypto4 = __toESM(require("node:crypto"), 1);
 function requestLogger(req, res, next) {
   const start = Date.now();
   const ip = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
@@ -1643,7 +2005,7 @@ function requestLogger(req, res, next) {
     const path = req.path.split("?")[0].slice(0, 200);
     if (!path.startsWith("/api")) return;
     db.insert(requestLogsTable).values({
-      id: import_node_crypto3.default.randomUUID(),
+      id: import_node_crypto4.default.randomUUID(),
       ipAddress: ip,
       method: req.method,
       path,
@@ -1683,7 +2045,7 @@ app.use(
     origin: true,
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Webhook-Secret", "X-API-Key"]
+    allowedHeaders: ["Content-Type", "Authorization", "X-Webhook-Secret", "X-API-Key", "X-Unlock-Token"]
   })
 );
 app.use((0, import_cookie_parser.default)(process.env.SESSION_SECRET || "kaai-fallback-secret-change-me"));
@@ -1811,8 +2173,34 @@ async function runMigrations() {
         is_active BOOLEAN NOT NULL DEFAULT TRUE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`,
+      // Lock columns for snippets
+      `ALTER TABLE snippets ADD COLUMN IF NOT EXISTS is_locked BOOLEAN NOT NULL DEFAULT FALSE`,
+      `ALTER TABLE snippets ADD COLUMN IF NOT EXISTS lock_type TEXT`,
+      `ALTER TABLE snippets ADD COLUMN IF NOT EXISTS lock_hash TEXT`,
+      `ALTER TABLE snippets ADD COLUMN IF NOT EXISTS lock_salt TEXT`,
+      // Snippet lock attempts table
+      `CREATE TABLE IF NOT EXISTS snippet_lock_attempts (
+        id TEXT PRIMARY KEY,
+        snippet_id TEXT NOT NULL,
+        ip_address TEXT NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        banned_until TIMESTAMPTZ
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_snippet_lock_attempts_snippet_ip ON snippet_lock_attempts (snippet_id, ip_address)`,
+      `ALTER TABLE snippets ADD COLUMN IF NOT EXISTS lock_disabled_at TIMESTAMPTZ`,
+      `CREATE TABLE IF NOT EXISTS snippet_disable_lock_otps (
+        id TEXT PRIMARY KEY,
+        snippet_id TEXT NOT NULL,
+        author_email TEXT NOT NULL,
+        otp TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        used BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_sdlo_snippet ON snippet_disable_lock_otps (snippet_id)`,
       `INSERT INTO admin_users (id, email, name, is_active) VALUES
-        (gen_random_uuid()::text, 'akaanakbaik17@proton.me', 'Aka', TRUE),
+        (gen_random_uuid()::text, 'akaanakbaik17@proton.me', 'Superadmin', TRUE),
         (gen_random_uuid()::text, 'yaudahpakeaja6@gmail.com', 'Admin', TRUE),
         (gen_random_uuid()::text, 'kelvdra46@gmail.com', 'Kelv', TRUE),
         (gen_random_uuid()::text, 'clpmadang@gmail.com', 'Admin', TRUE)

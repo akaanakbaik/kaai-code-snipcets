@@ -86,3 +86,5 @@ temp/
 
 # Attached assets (large binary files)
 attached_assets/
+.vercel
+.env*.local
