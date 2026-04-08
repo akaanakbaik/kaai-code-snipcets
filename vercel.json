@@ -9,11 +9,11 @@
       "maxDuration": 30
     }
   },
-  "routes": [
-    { "src": "/sitemap.xml", "dest": "/sitemap.xml" },
-    { "src": "/robots.txt", "dest": "/robots.txt" },
-    { "src": "/api/(.*)", "dest": "/api/index" },
-    { "src": "/(.*)", "dest": "/index.html" }
+  "rewrites": [
+  { "source": "/sitemap.xml", "destination": "/sitemap.xml" },
+  { "source": "/robots.txt", "destination": "/robots.txt" },
+  { "source": "/api/:path*", "destination": "/api/index" },
+  { "source": "/(.*)", "destination": "/index.html" }
   ],
   "headers": [
     {
