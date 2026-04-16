@@ -195,35 +195,47 @@ async function runSync(): Promise<void> {
 
 // ─── GitHub Helpers ───────────────────────────────────────────────────────────
 
-async function pushToGithub(token: string, repo: string, path: string, content: string, message: string): Promise<void> {
+async function pushToGithub(token: string, repo: string, path: string, content: string, message: string, retries = 2): Promise<void> {
   const apiUrl = `https://api.github.com/repos/${repo}/contents/${path}`;
-  let sha: string | undefined;
-  try {
-    const getRes = await fetch(apiUrl, {
-      headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" },
-      signal: AbortSignal.timeout(8_000),
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    // Get fresh SHA on every attempt (stale SHA causes 409)
+    let sha: string | undefined;
+    try {
+      const getRes = await fetch(apiUrl, {
+        headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (getRes.ok) {
+        const data = await getRes.json() as { sha?: string };
+        sha = data.sha;
+      }
+    } catch { /* File doesn't exist */ }
+
+    const body: Record<string, unknown> = { message, content };
+    if (sha) body.sha = sha;
+
+    const res = await fetch(apiUrl, {
+      method: "PUT",
+      headers: { Authorization: `token ${token}`, "Content-Type": "application/json", Accept: "application/vnd.github+json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20_000),
     });
-    if (getRes.ok) {
-      const data = await getRes.json() as { sha?: string };
-      sha = data.sha;
+
+    if (res.ok || res.status === 201) {
+      logger.info(`[sync] GitHub pushed: ${repo}/${path}`);
+      return;
     }
-  } catch { /* File doesn't exist */ }
 
-  const body: Record<string, unknown> = { message, content };
-  if (sha) body.sha = sha;
+    if (res.status === 409 && attempt < retries) {
+      // SHA conflict — wait briefly and retry with fresh SHA
+      await new Promise((r) => setTimeout(r, 1_000 * (attempt + 1)));
+      continue;
+    }
 
-  const res = await fetch(apiUrl, {
-    method: "PUT",
-    headers: { Authorization: `token ${token}`, "Content-Type": "application/json", Accept: "application/vnd.github+json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(20_000),
-  });
-
-  if (res.ok || res.status === 201) {
-    logger.info(`[sync] GitHub pushed: ${repo}/${path}`);
-  } else {
     const text = await res.text().catch(() => "");
     logger.warn(`[sync] GitHub push failed ${repo}/${path} ${res.status}: ${text.slice(0, 120)}`);
+    return;
   }
 }
 
