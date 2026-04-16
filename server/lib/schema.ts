@@ -19,6 +19,7 @@ export const snippetStatusEnum = pgEnum("snippet_status", [
 
 export const snippetsTable = pgTable("snippets", {
   id: text("id").primaryKey(),
+  slug: text("slug"),
   title: text("title").notNull(),
   description: text("description").notNull(),
   language: text("language").notNull(),

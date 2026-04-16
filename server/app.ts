@@ -182,6 +182,27 @@ async function runMigrations(): Promise<void> {
       )`,
       `CREATE INDEX IF NOT EXISTS idx_snippet_lock_attempts_snippet_ip ON snippet_lock_attempts (snippet_id, ip_address)`,
       `ALTER TABLE snippets ADD COLUMN IF NOT EXISTS lock_disabled_at TIMESTAMPTZ`,
+      `ALTER TABLE snippets ADD COLUMN IF NOT EXISTS slug TEXT`,
+      `CREATE INDEX IF NOT EXISTS idx_snippets_slug ON snippets(slug)`,
+      // Re-generate ALL slugs from title — pure title-based with deduplication (no random suffix)
+      // This replaces the old format (title + 6-char id suffix) with clean slugs
+      `WITH ranked AS (
+        SELECT id,
+          CASE
+            WHEN LENGTH(REGEXP_REPLACE(REGEXP_REPLACE(LOWER(title), '[^a-z0-9\\s-]', ' ', 'g'), '\\s+', '-', 'g')) >= 2
+            THEN TRIM(BOTH '-' FROM REGEXP_REPLACE(REGEXP_REPLACE(LOWER(title), '[^a-z0-9\\s-]', ' ', 'g'), '\\s+', '-', 'g'))
+            ELSE 'snippet'
+          END AS base_slug,
+          ROW_NUMBER() OVER (
+            PARTITION BY TRIM(BOTH '-' FROM REGEXP_REPLACE(REGEXP_REPLACE(LOWER(title), '[^a-z0-9\\s-]', ' ', 'g'), '\\s+', '-', 'g'))
+            ORDER BY created_at ASC
+          ) AS rn
+        FROM snippets
+      )
+      UPDATE snippets s
+      SET slug = CASE WHEN r.rn = 1 THEN r.base_slug ELSE r.base_slug || '-' || r.rn END
+      FROM ranked r
+      WHERE s.id = r.id`,
       `CREATE TABLE IF NOT EXISTS snippet_disable_lock_otps (
         id TEXT PRIMARY KEY,
         snippet_id TEXT NOT NULL,

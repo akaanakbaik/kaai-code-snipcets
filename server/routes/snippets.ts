@@ -6,14 +6,15 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { sendBroadcastEmail, sendDisableLockOtpEmail } from "../lib/mailer.js";
 import { logger } from "../lib/logger.js";
+import { generateUniqueSlug, titleToSlug } from "../lib/slug.js";
 
 const router = Router();
 
 const SUPERADMIN_EMAIL = "akaanakbaik17@proton.me";
 const UNLOCK_SECRET = process.env.SNIPPET_UNLOCK_SECRET ?? "kaai-unlock-s3cr3t-2k25-xR9pQm7z";
 const MAX_LOCK_ATTEMPTS = 5;
-const LOCK_BAN_MS = 15 * 60 * 1000; // 15 minutes initial ban
-const UNLOCK_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
+const LOCK_BAN_MS = 15 * 60 * 1000;
+const UNLOCK_TOKEN_TTL_MS = 60 * 60 * 1000;
 
 const ADMIN_EMAILS: Record<string, string> = {
   "akaanakbaik17@proton.me": "aka",
@@ -21,6 +22,95 @@ const ADMIN_EMAILS: Record<string, string> = {
   "kelvdra46@gmail.com": "hydra",
   "clpmadang@gmail.com": "udin",
 };
+
+// ─── Cross-language search keyword map (ID ↔ EN) ──────────────────────────────
+const CROSS_LANG_MAP: Record<string, string[]> = {
+  "fungsi": ["function", "func", "method"],
+  "function": ["fungsi", "func"],
+  "kelas": ["class"],
+  "class": ["kelas"],
+  "array": ["larik", "daftar"],
+  "larik": ["array", "list"],
+  "loop": ["perulangan", "iterasi"],
+  "perulangan": ["loop", "iteration"],
+  "kondisi": ["condition", "if", "else"],
+  "condition": ["kondisi"],
+  "variabel": ["variable", "var"],
+  "variable": ["variabel"],
+  "database": ["basis data", "db"],
+  "basis data": ["database", "db"],
+  "autentikasi": ["authentication", "auth", "login"],
+  "authentication": ["autentikasi", "auth"],
+  "login": ["masuk", "autentikasi", "auth"],
+  "masuk": ["login", "signin"],
+  "daftar": ["register", "signup", "list"],
+  "register": ["daftar", "signup"],
+  "komponen": ["component"],
+  "component": ["komponen"],
+  "utilitas": ["utility", "util", "helper"],
+  "utility": ["utilitas", "util", "helper"],
+  "pencarian": ["search", "query"],
+  "search": ["pencarian", "cari"],
+  "cari": ["search", "pencarian"],
+  "sortir": ["sort", "order"],
+  "sort": ["sortir", "urut"],
+  "filter": ["saring", "penyaring"],
+  "saring": ["filter"],
+  "enkripsi": ["encrypt", "encryption", "hash"],
+  "encrypt": ["enkripsi"],
+  "format": ["formatting", "parse"],
+  "tanggal": ["date", "time", "datetime"],
+  "date": ["tanggal", "waktu"],
+  "waktu": ["time", "date", "timestamp"],
+  "file": ["berkas", "dokumen"],
+  "berkas": ["file"],
+  "jaringan": ["network", "http", "api"],
+  "network": ["jaringan"],
+  "formulir": ["form", "input"],
+  "form": ["formulir"],
+  "tabel": ["table"],
+  "table": ["tabel"],
+  "koneksi": ["connection", "connect"],
+  "connection": ["koneksi"],
+  "pesan": ["message", "notification"],
+  "message": ["pesan", "notifikasi"],
+  "notifikasi": ["notification", "message"],
+  "notification": ["notifikasi", "pesan"],
+  "pengguna": ["user", "member", "akun"],
+  "user": ["pengguna", "member"],
+  "akun": ["account", "user"],
+  "account": ["akun", "user", "pengguna"],
+  "hapus": ["delete", "remove"],
+  "delete": ["hapus", "remove"],
+  "tambah": ["add", "insert", "create"],
+  "add": ["tambah", "insert"],
+  "ubah": ["update", "edit", "modify"],
+  "update": ["ubah", "perbarui"],
+  "perbarui": ["update", "refresh"],
+  "rekursif": ["recursive", "recursion"],
+  "recursive": ["rekursif"],
+  "aljabar": ["algebra", "math", "matematika"],
+  "matematika": ["math", "calculate", "kalkulasi"],
+  "kalkulasi": ["calculate", "computation"],
+  "gambar": ["image", "picture", "photo"],
+  "image": ["gambar", "foto"],
+  "warna": ["color", "colour"],
+  "color": ["warna", "colour"],
+  "animasi": ["animation", "animate"],
+  "animation": ["animasi"],
+  "tema": ["theme", "style"],
+  "theme": ["tema", "gaya"],
+};
+
+function expandSearchTerms(query: string): string[] {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const expanded = new Set<string>(terms);
+  for (const term of terms) {
+    const mapped = CROSS_LANG_MAP[term];
+    if (mapped) mapped.forEach((t) => expanded.add(t));
+  }
+  return Array.from(expanded);
+}
 
 function generateId(): string {
   const DIGITS = "0123456789";
@@ -84,6 +174,7 @@ function formatSnippet(
   const { hideEmail = true, includeCode = true } = options;
   const result: Record<string, unknown> = {
     id: snippet.id,
+    slug: snippet.slug,
     title: snippet.title,
     description: snippet.description,
     language: snippet.language,
@@ -114,6 +205,7 @@ async function sendToBot(snippet: Record<string, unknown>) {
       headers: { "Content-Type": "application/json", "X-Webhook-Secret": secret ?? "" },
       body: JSON.stringify({
         id: snippet.id,
+        slug: snippet.slug,
         nama: snippet.authorName,
         email: snippet.authorEmail,
         namacode: snippet.title,
@@ -164,6 +256,7 @@ const ListSnippetsQuery = z.object({
   search: z.string().optional(),
   language: z.string().optional(),
   tag: z.string().optional(),
+  tags: z.string().optional(),
   sort: z.enum(["newest", "oldest", "popular", "copies", "az"]).optional(),
   sortBy: z.enum(["popular", "latest", "az"]).optional(),
 });
@@ -181,146 +274,93 @@ router.get("/snippets/popular", async (req, res) => {
   }
 });
 
-// GET /api/snippets/tags
+// GET /api/snippets/tags — returns ALL tags with counts (+ optional limit param)
 router.get("/snippets/tags", async (req, res) => {
   try {
+    const limit = req.query.limit ? Math.min(Number(req.query.limit), 500) : 0; // 0 = all
     const rows = await db.select({ tags: snippetsTable.tags }).from(snippetsTable).where(eq(snippetsTable.status, "approved"));
     const tagCounts: Record<string, number> = {};
     rows.forEach((r) => { (r.tags ?? []).forEach((tag) => { tagCounts[tag] = (tagCounts[tag] || 0) + 1; }); });
-    const sorted = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([tag, count]) => ({ tag, count }));
-    res.json({ data: sorted });
+    let sorted = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).map(([tag, count]) => ({ tag, count }));
+    if (limit > 0) sorted = sorted.slice(0, limit);
+    res.json({ data: sorted, total: sorted.length });
   } catch {
     res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch tags" });
+  }
+});
+
+// GET /api/snippets/check-title — check if title is duplicate, return suggestions
+router.get("/snippets/check-title", async (req, res) => {
+  try {
+    const title = String(req.query.title ?? "").trim();
+    if (!title) { res.json({ isDuplicate: false }); return; }
+
+    // Check exact or case-insensitive title match
+    const rows = await db
+      .select({ id: snippetsTable.id, slug: snippetsTable.slug, title: snippetsTable.title })
+      .from(snippetsTable)
+      .where(ilike(snippetsTable.title, title))
+      .limit(1);
+
+    const isDuplicate = rows.length > 0;
+    if (!isDuplicate) {
+      const previewSl = titleToSlug(title);
+      res.json({ isDuplicate: false, previewSlug: previewSl });
+      return;
+    }
+
+    // Generate what the next available slug would be
+    const suggestedSlug = await generateUniqueSlug(title);
+    // Suggested title: append " - N" matching the slug suffix
+    const slugSuffix = suggestedSlug.replace(titleToSlug(title), "").replace(/^-/, "");
+    const suggestedTitle = slugSuffix ? `${title} - ${slugSuffix}` : title;
+
+    res.json({
+      isDuplicate: true,
+      existingId: rows[0]?.id ?? null,
+      existingSlug: rows[0]?.slug ?? null,
+      suggestedSlug,
+      suggestedTitle,
+    });
+  } catch (err) {
+    logger.warn(`[snippets] check-title error: ${(err as Error).message}`);
+    res.status(500).json({ error: "SERVER_ERROR", message: "Failed to check title" });
   }
 });
 
 // POST /api/snippets/:id/view
 router.post("/snippets/:id/view", async (req, res) => {
   try {
-    await db.update(snippetsTable).set({ viewCount: sql`${snippetsTable.viewCount} + 1` }).where(and(eq(snippetsTable.id, req.params.id), eq(snippetsTable.status, "approved")));
-    res.json({ success: true });
+    const [snippet] = await db
+      .select({ id: snippetsTable.id, viewCount: snippetsTable.viewCount })
+      .from(snippetsTable)
+      .where(and(eq(snippetsTable.id, req.params.id), eq(snippetsTable.status, "approved")))
+      .limit(1);
+    if (!snippet) { res.status(404).json({ error: "NOT_FOUND" }); return; }
+    await db.update(snippetsTable).set({ viewCount: (snippet.viewCount ?? 0) + 1 }).where(eq(snippetsTable.id, snippet.id));
+    res.json({ viewCount: (snippet.viewCount ?? 0) + 1 });
   } catch {
-    res.json({ success: false });
+    res.status(500).json({ error: "SERVER_ERROR" });
   }
 });
 
 // POST /api/snippets/:id/copy
 router.post("/snippets/:id/copy", async (req, res) => {
   try {
-    await db.update(snippetsTable).set({ copyCount: sql`${snippetsTable.copyCount} + 1` }).where(and(eq(snippetsTable.id, req.params.id), eq(snippetsTable.status, "approved")));
-    res.json({ success: true });
-  } catch {
-    res.json({ success: false });
-  }
-});
-
-// POST /api/snippets/:id/unlock — verify password/pin for locked snippet
-router.post("/snippets/:id/unlock", async (req: Request, res: Response) => {
-  const { id } = req.params;
-  const { password } = req.body ?? {};
-  const ip = getClientIp(req);
-
-  if (!password || typeof password !== "string" || password.length > 200) {
-    res.status(400).json({ error: "VALIDATION_ERROR", message: "Password/PIN diperlukan" });
-    return;
-  }
-
-  try {
-    // Check rate limit
-    const [attempt] = await db
-      .select()
-      .from(snippetLockAttemptsTable)
-      .where(and(eq(snippetLockAttemptsTable.snippetId, id), eq(snippetLockAttemptsTable.ipAddress, ip)))
-      .limit(1);
-
-    if (attempt) {
-      if (attempt.bannedUntil && attempt.bannedUntil > new Date()) {
-        const remainSec = Math.ceil((attempt.bannedUntil.getTime() - Date.now()) / 1000);
-        const remainMin = Math.ceil(remainSec / 60);
-        res.status(429).json({
-          error: "RATE_LIMITED",
-          message: `Terlalu banyak percobaan. Coba lagi dalam ${remainMin} menit.`,
-          retryAfter: attempt.bannedUntil.toISOString(),
-        });
-        return;
-      }
-    }
-
-    // Fetch snippet
     const [snippet] = await db
-      .select()
+      .select({ id: snippetsTable.id, copyCount: snippetsTable.copyCount })
       .from(snippetsTable)
-      .where(and(eq(snippetsTable.id, id), eq(snippetsTable.status, "approved")))
+      .where(and(eq(snippetsTable.id, req.params.id), eq(snippetsTable.status, "approved")))
       .limit(1);
-
-    if (!snippet) {
-      res.status(404).json({ error: "NOT_FOUND", message: "Snippet tidak ditemukan" });
-      return;
-    }
-
-    if (!snippet.isLocked || !snippet.lockHash || !snippet.lockSalt) {
-      res.status(400).json({ error: "NOT_LOCKED", message: "Snippet ini tidak dikunci" });
-      return;
-    }
-
-    // Verify password
-    const inputHash = hashPassword(password, snippet.lockSalt);
-    const isCorrect = crypto.timingSafeEqual(
-      Buffer.from(inputHash, "hex"),
-      Buffer.from(snippet.lockHash, "hex")
-    );
-
-    if (!isCorrect) {
-      // Increment attempts
-      const newCount = (attempt?.attemptCount ?? 0) + 1;
-      let bannedUntil: Date | null = null;
-
-      if (newCount >= MAX_LOCK_ATTEMPTS) {
-        // Exponential backoff: 15min * 2^(n-5) where n = total attempts
-        const multiplier = Math.pow(2, Math.floor(newCount / MAX_LOCK_ATTEMPTS) - 1);
-        bannedUntil = new Date(Date.now() + LOCK_BAN_MS * Math.min(multiplier, 64));
-      }
-
-      if (attempt) {
-        await db.update(snippetLockAttemptsTable).set({
-          attemptCount: newCount,
-          lastAttemptAt: new Date(),
-          bannedUntil: bannedUntil ?? attempt.bannedUntil,
-        }).where(eq(snippetLockAttemptsTable.id, attempt.id));
-      } else {
-        await db.insert(snippetLockAttemptsTable).values({
-          id: crypto.randomUUID(),
-          snippetId: id,
-          ipAddress: ip,
-          attemptCount: 1,
-          lastAttemptAt: new Date(),
-          bannedUntil,
-        });
-      }
-
-      const attemptsLeft = Math.max(0, MAX_LOCK_ATTEMPTS - (newCount % MAX_LOCK_ATTEMPTS));
-      res.status(401).json({
-        error: "WRONG_PASSWORD",
-        message: `Password/PIN salah. ${attemptsLeft > 0 ? `Sisa ${attemptsLeft} percobaan sebelum diblokir sementara.` : "Akses diblokir sementara."}`,
-        attemptsLeft,
-      });
-      return;
-    }
-
-    // Correct password — reset attempts
-    if (attempt) {
-      await db.delete(snippetLockAttemptsTable).where(eq(snippetLockAttemptsTable.id, attempt.id));
-    }
-
-    const token = generateUnlockToken(id);
-    res.json({ success: true, token, expiresIn: UNLOCK_TOKEN_TTL_MS / 1000 });
-  } catch (err) {
-    logger.error(`[unlock] Error: ${(err as Error).message}`);
-    res.status(500).json({ error: "SERVER_ERROR", message: "Terjadi kesalahan server" });
+    if (!snippet) { res.status(404).json({ error: "NOT_FOUND" }); return; }
+    await db.update(snippetsTable).set({ copyCount: (snippet.copyCount ?? 0) + 1 }).where(eq(snippetsTable.id, snippet.id));
+    res.json({ copyCount: (snippet.copyCount ?? 0) + 1 });
+  } catch {
+    res.status(500).json({ error: "SERVER_ERROR" });
   }
 });
 
-// GET /api/snippets
+// GET /api/snippets — list with search, filter, pagination
 router.get("/snippets", async (req, res) => {
   const parsed = ListSnippetsQuery.safeParse(req.query);
   if (!parsed.success) {
@@ -328,11 +368,11 @@ router.get("/snippets", async (req, res) => {
     return;
   }
 
-  const { page, limit, q, search, language, tag, sort, sortBy } = parsed.data;
+  const { page, limit, q, search, language, tag, tags, sort, sortBy } = parsed.data;
   const offset = (page - 1) * limit;
-  const searchQuery = q || search || undefined;
+  const searchQuery = (q || search || "").trim();
 
-  let resolvedSort: "newest" | "oldest" | "popular" | "copies" | "az" = "newest";
+  let resolvedSort: "newest" | "oldest" | "popular" | "copies" | "az" = "az";
   if (sort) {
     resolvedSort = sort;
   } else if (sortBy) {
@@ -343,18 +383,27 @@ router.get("/snippets", async (req, res) => {
 
   try {
     const conditions = [eq(snippetsTable.status, "approved")];
+
+    // Enhanced cross-language search
     if (searchQuery) {
-      conditions.push(
-        or(
-          ilike(snippetsTable.title, `%${searchQuery}%`),
-          ilike(snippetsTable.description, `%${searchQuery}%`),
-          ilike(snippetsTable.authorName, `%${searchQuery}%`),
-          sql`EXISTS (SELECT 1 FROM unnest(${snippetsTable.tags}) AS t WHERE t ILIKE ${'%' + searchQuery + '%'})`,
-        )!
-      );
+      const terms = expandSearchTerms(searchQuery);
+      const searchConditions = terms.flatMap((term) => [
+        ilike(snippetsTable.title, `%${term}%`),
+        ilike(snippetsTable.description, `%${term}%`),
+        ilike(snippetsTable.authorName, `%${term}%`),
+        ilike(snippetsTable.language, `%${term}%`),
+        sql`EXISTS (SELECT 1 FROM unnest(${snippetsTable.tags}) AS t WHERE t ILIKE ${'%' + term + '%'})`,
+      ]);
+      conditions.push(or(...searchConditions)!);
     }
+
     if (language) conditions.push(eq(snippetsTable.language, language));
-    if (tag) conditions.push(sql`${snippetsTable.tags} @> ARRAY[${tag}]::text[]`);
+
+    // Support multiple tags via comma-separated "tags" param or single "tag" param
+    const tagList = tags ? tags.split(",").map((t) => t.trim()).filter(Boolean) : tag ? [tag] : [];
+    for (const t of tagList) {
+      conditions.push(sql`${snippetsTable.tags} @> ARRAY[${t}]::text[]`);
+    }
 
     const where = and(...conditions);
     const orderBy =
@@ -363,7 +412,7 @@ router.get("/snippets", async (req, res) => {
       resolvedSort === "popular" ? [desc(snippetsTable.viewCount), desc(snippetsTable.copyCount)] :
       resolvedSort === "copies"  ? [desc(snippetsTable.copyCount)] :
       resolvedSort === "az"      ? [asc(snippetsTable.title)] :
-      [desc(snippetsTable.createdAt)];
+      [asc(snippetsTable.title)];
 
     const [snippets, [{ total }]] = await Promise.all([
       db.select().from(snippetsTable).where(where).orderBy(...orderBy).limit(limit).offset(offset),
@@ -376,12 +425,13 @@ router.get("/snippets", async (req, res) => {
       pagination: { page, limit, total: totalNum, totalPages: Math.ceil(totalNum / limit) },
       totalPages: Math.ceil(totalNum / limit),
     });
-  } catch {
+  } catch (err) {
+    logger.error(`[snippets] List error: ${(err as Error).message}`);
     res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch snippets" });
   }
 });
 
-// POST /api/snippets
+// POST /api/snippets — create new snippet
 router.post("/snippets", async (req, res) => {
   const parsed = CreateSnippetBody.safeParse(req.body);
   if (!parsed.success) {
@@ -391,7 +441,6 @@ router.post("/snippets", async (req, res) => {
 
   const { isLocked, lockType, lockPassword, ...rest } = parsed.data;
 
-  // Validate lock fields
   if (isLocked) {
     if (!lockType) {
       res.status(400).json({ error: "VALIDATION_ERROR", message: "lockType diperlukan jika snippet dikunci" });
@@ -408,6 +457,9 @@ router.post("/snippets", async (req, res) => {
   }
 
   const id = generateId();
+  // Generate pure title-based unique slug (e.g., "downr", "downr-2", "downr-3")
+  const slug = await generateUniqueSlug(rest.title);
+
   try {
     let lockHash: string | null = null;
     let lockSalt: string | null = null;
@@ -421,6 +473,7 @@ router.post("/snippets", async (req, res) => {
       .insert(snippetsTable)
       .values({
         id,
+        slug,
         ...rest,
         isLocked: isLocked ?? false,
         lockType: isLocked ? (lockType ?? null) : null,
@@ -443,138 +496,310 @@ router.post("/snippets", async (req, res) => {
   }
 });
 
-// GET /api/snippets/:id
+// GET /api/snippets/:id — supports both ID and slug lookup
 router.get("/snippets/:id", async (req: Request, res: Response) => {
   try {
-    const [snippet] = await db
+    const { id } = req.params;
+    const unlockToken = req.headers["x-unlock-token"] as string | undefined;
+
+    // Try by ID first, then by slug
+    let snippet = await db
       .select()
       .from(snippetsTable)
-      .where(and(eq(snippetsTable.id, req.params.id), eq(snippetsTable.status, "approved")))
-      .limit(1);
+      .where(and(eq(snippetsTable.id, id), eq(snippetsTable.status, "approved")))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
 
     if (!snippet) {
-      res.status(404).json({ error: "NOT_FOUND", message: "Snippet not found" });
+      snippet = await db
+        .select()
+        .from(snippetsTable)
+        .where(and(eq(snippetsTable.slug, id), eq(snippetsTable.status, "approved")))
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+    }
+
+    if (!snippet) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Snippet tidak ditemukan" });
       return;
     }
 
-    // Handle locked snippet: check for unlock token
+    // If locked, check for unlock token
     if (snippet.isLocked) {
-      const tokenHeader = req.headers["x-unlock-token"] as string | undefined;
-      const includeCode = !!tokenHeader && verifyUnlockToken(tokenHeader, snippet.id);
-      res.json(formatSnippet(snippet, { includeCode }));
+      if (unlockToken && verifyUnlockToken(unlockToken, snippet.id)) {
+        res.json(formatSnippet(snippet, { includeCode: true }));
+      } else {
+        res.json(formatSnippet(snippet, { includeCode: false }));
+      }
       return;
     }
 
     res.json(formatSnippet(snippet));
-  } catch {
+  } catch (err) {
+    logger.error(`[snippets] Get error: ${(err as Error).message}`);
     res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch snippet" });
   }
 });
 
-// ─── Disable Lock Permanently ────────────────────────────────────────────────
+// POST /api/snippets/:id/unlock — validate password and return unlock token
+router.post("/snippets/:id/unlock", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const ip = getClientIp(req);
+  const { password } = req.body ?? {};
 
-router.post("/snippets/:id/disable-lock/request", async (req, res) => {
+  if (!password) {
+    res.status(400).json({ error: "MISSING_PASSWORD", message: "Password diperlukan" });
+    return;
+  }
+
+  try {
+    // Check for existing ban
+    const [attempt] = await db
+      .select()
+      .from(snippetLockAttemptsTable)
+      .where(and(eq(snippetLockAttemptsTable.snippetId, id), eq(snippetLockAttemptsTable.ipAddress, ip)))
+      .limit(1);
+
+    if (attempt?.bannedUntil && attempt.bannedUntil > new Date()) {
+      const minutesLeft = Math.ceil((attempt.bannedUntil.getTime() - Date.now()) / 60000);
+      res.status(429).json({
+        error: "TOO_MANY_ATTEMPTS",
+        message: `Terlalu banyak percobaan. Coba lagi dalam ${minutesLeft} menit.`,
+        bannedUntil: attempt.bannedUntil.toISOString(),
+      });
+      return;
+    }
+
+    const [snippet] = await db
+      .select()
+      .from(snippetsTable)
+      .where(and(eq(snippetsTable.id, id), eq(snippetsTable.status, "approved")))
+      .limit(1);
+
+    if (!snippet) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Snippet tidak ditemukan" });
+      return;
+    }
+
+    if (!snippet.isLocked || !snippet.lockHash || !snippet.lockSalt) {
+      res.status(400).json({ error: "NOT_LOCKED", message: "Snippet ini tidak dikunci" });
+      return;
+    }
+
+    // If lock is disabled, allow access without password
+    if (snippet.lockDisabledAt) {
+      const token = generateUnlockToken(snippet.id);
+      res.json({ success: true, token });
+      return;
+    }
+
+    const inputHash = hashPassword(password, snippet.lockSalt);
+    const isCorrect = crypto.timingSafeEqual(
+      Buffer.from(inputHash, "hex"),
+      Buffer.from(snippet.lockHash, "hex")
+    );
+
+    if (!isCorrect) {
+      const newCount = (attempt?.attemptCount ?? 0) + 1;
+      let bannedUntil: Date | null = null;
+
+      if (newCount >= MAX_LOCK_ATTEMPTS) {
+        const multiplier = Math.pow(2, Math.floor(newCount / MAX_LOCK_ATTEMPTS) - 1);
+        bannedUntil = new Date(Date.now() + LOCK_BAN_MS * Math.min(multiplier, 64));
+      }
+
+      const attemptsLeft = Math.max(0, MAX_LOCK_ATTEMPTS - newCount);
+
+      if (attempt) {
+        await db.update(snippetLockAttemptsTable).set({
+          attemptCount: newCount,
+          lastAttemptAt: new Date(),
+          bannedUntil: bannedUntil ?? attempt.bannedUntil,
+        }).where(eq(snippetLockAttemptsTable.id, attempt.id));
+      } else {
+        await db.insert(snippetLockAttemptsTable).values({
+          id: crypto.randomUUID(),
+          snippetId: id,
+          ipAddress: ip,
+          attemptCount: 1,
+          lastAttemptAt: new Date(),
+          bannedUntil,
+        });
+      }
+
+      res.status(401).json({
+        error: "WRONG_PASSWORD",
+        message: snippet.lockType === "pin" ? "PIN salah." : "Password salah.",
+        attemptsLeft,
+        banned: !!bannedUntil,
+      });
+      return;
+    }
+
+    // Reset attempts on success
+    if (attempt) {
+      await db.update(snippetLockAttemptsTable).set({ attemptCount: 0, bannedUntil: null }).where(eq(snippetLockAttemptsTable.id, attempt.id));
+    }
+
+    const token = generateUnlockToken(snippet.id);
+    res.json({ success: true, token });
+  } catch (err) {
+    logger.error(`[snippets] Unlock error: ${(err as Error).message}`);
+    res.status(500).json({ error: "SERVER_ERROR", message: "Gagal memproses unlock" });
+  }
+});
+
+// POST /api/snippets/:id/disable-lock/request — request OTP to disable lock
+router.post("/snippets/:id/disable-lock/request", async (req: Request, res: Response) => {
   const { id } = req.params;
   const { authorEmail } = req.body ?? {};
 
-  if (!authorEmail || typeof authorEmail !== "string") {
-    res.status(400).json({ error: "VALIDATION_ERROR", message: "Email penulis diperlukan" });
+  if (!authorEmail) {
+    res.status(400).json({ error: "MISSING_EMAIL", message: "Email diperlukan" });
     return;
   }
-
-  const [snippet] = await db.select().from(snippetsTable).where(eq(snippetsTable.id, id)).limit(1);
-  if (!snippet) { res.status(404).json({ error: "NOT_FOUND", message: "Snippet tidak ditemukan" }); return; }
-  if (!snippet.isLocked) { res.status(400).json({ error: "NOT_LOCKED", message: "Snippet ini tidak dikunci" }); return; }
-  if (snippet.lockDisabledAt) { res.status(400).json({ error: "ALREADY_DISABLED", message: "Kunci sudah dimatikan sebelumnya" }); return; }
-  if (snippet.authorEmail.toLowerCase() !== authorEmail.trim().toLowerCase()) {
-    res.status(403).json({ error: "WRONG_EMAIL", message: "Email tidak sesuai dengan penulis snippet" });
-    return;
-  }
-
-  // Invalidate old OTPs
-  await db.update(snippetDisableLockOtpsTable)
-    .set({ used: true })
-    .where(and(eq(snippetDisableLockOtpsTable.snippetId, id), eq(snippetDisableLockOtpsTable.used, false)));
-
-  const otp = String(Math.floor(100 + Math.random() * 900)); // 100–999
-  const expiresAt = new Date(Date.now() + 3 * 60 * 1000);
-
-  await db.insert(snippetDisableLockOtpsTable).values({
-    id: crypto.randomUUID(),
-    snippetId: id,
-    authorEmail: snippet.authorEmail,
-    otp,
-    expiresAt,
-    used: false,
-  });
 
   try {
-    await sendDisableLockOtpEmail(snippet.authorEmail, snippet.title, otp);
-  } catch (e) {
-    logger.error(`[disable-lock] Failed to send OTP email: ${(e as Error).message}`);
-    res.status(500).json({ error: "EMAIL_FAILED", message: "Gagal mengirim email OTP. Coba lagi." });
-    return;
-  }
+    const [snippet] = await db
+      .select()
+      .from(snippetsTable)
+      .where(and(eq(snippetsTable.id, id), eq(snippetsTable.status, "approved")))
+      .limit(1);
 
-  res.json({ success: true, message: "OTP telah dikirim ke email penulis" });
+    if (!snippet) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Snippet tidak ditemukan" });
+      return;
+    }
+
+    if (!snippet.isLocked) {
+      res.status(400).json({ error: "NOT_LOCKED", message: "Snippet ini tidak dikunci" });
+      return;
+    }
+
+    if (snippet.lockDisabledAt) {
+      res.status(400).json({ error: "ALREADY_DISABLED", message: "Kunci sudah dinonaktifkan" });
+      return;
+    }
+
+    if (snippet.authorEmail.toLowerCase() !== String(authorEmail).toLowerCase()) {
+      res.status(403).json({ error: "FORBIDDEN", message: "Email tidak cocok dengan email pemilik snippet" });
+      return;
+    }
+
+    const otp = String(100000 + crypto.randomInt(900000)); // 6-digit OTP
+    const expiresAt = new Date(Date.now() + 3 * 60 * 1000); // 3 minutes
+
+    await db.insert(snippetDisableLockOtpsTable).values({
+      id: crypto.randomUUID(),
+      snippetId: id,
+      authorEmail: snippet.authorEmail,
+      otp,
+      expiresAt,
+      used: false,
+      createdAt: new Date(),
+    });
+
+    await sendDisableLockOtpEmail(snippet.authorEmail, snippet.title, otp);
+
+    res.json({ success: true, message: "Kode OTP dikirim ke email kamu" });
+  } catch (err) {
+    logger.error(`[snippets] DisableLock request error: ${(err as Error).message}`);
+    res.status(500).json({ error: "SERVER_ERROR", message: "Gagal mengirim OTP" });
+  }
 });
 
-router.post("/snippets/:id/disable-lock/verify", async (req, res) => {
+// POST /api/snippets/:id/disable-lock/verify — verify OTP and disable lock
+router.post("/snippets/:id/disable-lock/verify", async (req: Request, res: Response) => {
   const { id } = req.params;
   const { otp } = req.body ?? {};
 
-  if (!otp) { res.status(400).json({ error: "VALIDATION_ERROR", message: "OTP diperlukan" }); return; }
+  if (!otp) {
+    res.status(400).json({ error: "MISSING_OTP", message: "Kode OTP diperlukan" });
+    return;
+  }
 
-  const [snippet] = await db.select().from(snippetsTable).where(eq(snippetsTable.id, id)).limit(1);
-  if (!snippet) { res.status(404).json({ error: "NOT_FOUND", message: "Snippet tidak ditemukan" }); return; }
-  if (snippet.lockDisabledAt) { res.status(400).json({ error: "ALREADY_DISABLED", message: "Kunci sudah dimatikan sebelumnya" }); return; }
+  try {
+    const [snippet] = await db
+      .select()
+      .from(snippetsTable)
+      .where(and(eq(snippetsTable.id, id), eq(snippetsTable.status, "approved")))
+      .limit(1);
 
-  const [otpRecord] = await db.select()
-    .from(snippetDisableLockOtpsTable)
-    .where(and(eq(snippetDisableLockOtpsTable.snippetId, id), eq(snippetDisableLockOtpsTable.used, false)))
-    .orderBy(desc(snippetDisableLockOtpsTable.createdAt))
-    .limit(1);
+    if (!snippet) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Snippet tidak ditemukan" });
+      return;
+    }
 
-  if (!otpRecord) { res.status(400).json({ error: "NO_OTP", message: "Tidak ada OTP aktif. Minta OTP baru." }); return; }
+    const [otpRecord] = await db
+      .select()
+      .from(snippetDisableLockOtpsTable)
+      .where(
+        and(
+          eq(snippetDisableLockOtpsTable.snippetId, id),
+          eq(snippetDisableLockOtpsTable.used, false),
+        )
+      )
+      .orderBy(desc(snippetDisableLockOtpsTable.createdAt))
+      .limit(1);
 
-  if (new Date() > otpRecord.expiresAt) {
+    if (!otpRecord) {
+      res.status(400).json({ error: "NO_OTP", message: "Tidak ada OTP aktif untuk snippet ini" });
+      return;
+    }
+
+    if (otpRecord.expiresAt < new Date()) {
+      res.status(400).json({ error: "OTP_EXPIRED", message: "Kode OTP sudah kadaluarsa" });
+      return;
+    }
+
+    if (otpRecord.otp !== String(otp).trim()) {
+      res.status(400).json({ error: "WRONG_OTP", message: "Kode OTP salah" });
+      return;
+    }
+
     await db.update(snippetDisableLockOtpsTable).set({ used: true }).where(eq(snippetDisableLockOtpsTable.id, otpRecord.id));
-    res.status(400).json({ error: "OTP_EXPIRED", message: "OTP sudah kedaluwarsa. Minta OTP baru." });
-    return;
+
+    const now = new Date();
+    const [updated] = await db.update(snippetsTable)
+      .set({ lockDisabledAt: now, updatedAt: now })
+      .where(eq(snippetsTable.id, id))
+      .returning();
+
+    res.json({ success: true, message: "Kunci berhasil dimatikan secara permanen", snippet: formatSnippet(updated) });
+  } catch (err) {
+    logger.error(`[snippets] DisableLock verify error: ${(err as Error).message}`);
+    res.status(500).json({ error: "SERVER_ERROR", message: "Gagal memverifikasi OTP" });
   }
-
-  if (otpRecord.otp !== String(otp).trim()) {
-    res.status(400).json({ error: "WRONG_OTP", message: "Kode OTP salah" });
-    return;
-  }
-
-  await db.update(snippetDisableLockOtpsTable).set({ used: true }).where(eq(snippetDisableLockOtpsTable.id, otpRecord.id));
-
-  const now = new Date();
-  const [updated] = await db.update(snippetsTable)
-    .set({ lockDisabledAt: now, updatedAt: now })
-    .where(eq(snippetsTable.id, id))
-    .returning();
-
-  res.json({ success: true, message: "Kunci berhasil dimatikan secara permanen", snippet: formatSnippet(updated) });
 });
 
-// Webhook approve/reject (for Telegram bot)
+// POST /api/snippets/:id/approve (Webhook for Telegram bot)
 router.post("/snippets/:id/approve", async (req, res) => {
   const secret = process.env.VITE_WEBHOOK_SECRET;
   if (secret && req.headers["x-webhook-secret"] !== secret) {
     res.status(401).json({ error: "UNAUTHORIZED" });
     return;
   }
+  const [snippet] = await db
+    .select()
+    .from(snippetsTable)
+    .where(eq(snippetsTable.id, req.params.id))
+    .limit(1);
+
+  if (!snippet) { res.status(404).json({ error: "NOT_FOUND" }); return; }
+
+  // Backfill slug if missing
+  const slug = snippet.slug ?? generateSlug(snippet.title, snippet.id);
+
   const [updated] = await db
     .update(snippetsTable)
-    .set({ status: "approved", updatedAt: new Date() })
+    .set({ status: "approved", slug, updatedAt: new Date() })
     .where(eq(snippetsTable.id, req.params.id))
     .returning();
-  if (!updated) { res.status(404).json({ error: "NOT_FOUND" }); return; }
+
   res.json(formatSnippet(updated));
 });
 
+// POST /api/snippets/:id/reject (Webhook for Telegram bot)
 router.post("/snippets/:id/reject", async (req, res) => {
   const secret = process.env.VITE_WEBHOOK_SECRET;
   if (secret && req.headers["x-webhook-secret"] !== secret) {

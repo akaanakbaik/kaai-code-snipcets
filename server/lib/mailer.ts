@@ -84,18 +84,47 @@ export async function sendApprovalEmail(
   to: string,
   snippetTitle: string,
   snippetId: string,
+  snippetSlug?: string | null,
+  totalSnippets?: number,
 ): Promise<void> {
   const t = getTransporter();
-  const url = `${process.env.APP_URL ?? "https://kaai.vercel.app"}/snippet/${snippetId}`;
+  const appUrl = process.env.APP_URL ?? "https://codes-snippet.kaai.my.id";
+  const urlById = `${appUrl}/snippet/${snippetId}`;
+  const urlBySlug = snippetSlug ? `${appUrl}/snippet/${snippetSlug}` : null;
+  const primaryUrl = urlBySlug ?? urlById;
+
+  const totalInfo = totalSnippets && totalSnippets > 0
+    ? `<p style="color:#94a3b8;font-size:13px;margin-top:4px">📚 Total snippet di Kaai saat ini: <strong style="color:#e2e8f0">${totalSnippets}</strong> snippet</p>`
+    : "";
+
+  const slugSection = urlBySlug
+    ? `
+    <div style="background:#1e2a3a;border:1px solid #2d3f55;border-radius:8px;padding:16px;margin-top:16px">
+      <p style="margin:0 0 8px 0;font-size:13px;color:#94a3b8">🔗 Link snippet kamu:</p>
+      <p style="margin:0 0 4px 0;font-size:12px;color:#64748b">Via slug (SEO-friendly):</p>
+      <p style="margin:0 0 8px 0;font-size:13px;color:#3b82f6;word-break:break-all">${urlBySlug}</p>
+      <p style="margin:0 0 4px 0;font-size:12px;color:#64748b">Via ID (permanen):</p>
+      <p style="margin:0;font-size:13px;color:#94a3b8;word-break:break-all">${urlById}</p>
+    </div>
+    `
+    : "";
+
   await t.sendMail({
     from: `"Kaai Code Snippet" <${process.env.GMAIL_USER}>`,
     to,
     subject: `✅ Snippet kamu disetujui: ${snippetTitle}`,
     html: `
       <div style="${BASE_STYLE}">
-        <h2 style="color:#22c55e;margin-top:0">Snippet Disetujui!</h2>
-        <p>Snippet <strong>${snippetTitle}</strong> sudah disetujui dan bisa dilihat publik.</p>
-        <a href="${url}" style="display:inline-block;background:#3b82f6;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;margin-top:16px">Lihat Snippet</a>
+        <h2 style="color:#22c55e;margin-top:0">🎉 Snippet Disetujui!</h2>
+        <p>Hei! Snippet <strong style="color:#e2e8f0">${snippetTitle}</strong> sudah disetujui dan kini bisa dilihat publik di Kaai.</p>
+        ${totalInfo}
+        ${slugSection}
+        <a href="${primaryUrl}" style="display:inline-block;background:#3b82f6;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;margin-top:16px;font-weight:600">
+          Lihat Snippet →
+        </a>
+        <p style="color:#94a3b8;font-size:12px;margin-top:20px">
+          Terima kasih sudah berkontribusi ke komunitas developer Indonesia! 🇮🇩
+        </p>
         ${FOOTER}
       </div>
     `,

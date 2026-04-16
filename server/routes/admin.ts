@@ -455,7 +455,12 @@ router.post("/admin/snippets/:id/approve", async (req: Request, res: Response) =
       const [snippet] = await db.select().from(snippetsTable).where(eq(snippetsTable.id, req.params.id)).limit(1);
       if (!snippet) { res.status(404).json({ error: "NOT_FOUND" }); return; }
       const [updated] = await db.update(snippetsTable).set({ status: "approved", rejectReason: null, updatedAt: new Date() }).where(eq(snippetsTable.id, req.params.id)).returning();
-      sendApprovalEmail(snippet.authorEmail, snippet.title, snippet.id).catch(() => {});
+      // Get total approved count for email
+      db.select({ count: count() }).from(snippetsTable).where(eq(snippetsTable.status, "approved")).then(([row]) => {
+        sendApprovalEmail(snippet.authorEmail, snippet.title, snippet.id, snippet.slug, Number(row?.count ?? 0)).catch(() => {});
+      }).catch(() => {
+        sendApprovalEmail(snippet.authorEmail, snippet.title, snippet.id, snippet.slug).catch(() => {});
+      });
       res.json({ ...updated, tags: updated.tags ?? [], createdAt: updated.createdAt.toISOString(), updatedAt: updated.updatedAt.toISOString() });
     } catch {
       res.status(500).json({ error: "SERVER_ERROR", message: "Failed to approve snippet" });
@@ -491,7 +496,13 @@ router.patch("/admin/snippets/:id", async (req: Request, res: Response) => {
       const [snippet] = await db.select().from(snippetsTable).where(eq(snippetsTable.id, req.params.id)).limit(1);
       if (!snippet) { res.status(404).json({ error: "NOT_FOUND" }); return; }
       const [updated] = await db.update(snippetsTable).set({ status, rejectReason: status === "rejected" ? (rejectReason ?? null) : null, updatedAt: new Date() }).where(eq(snippetsTable.id, req.params.id)).returning();
-      if (status === "approved") sendApprovalEmail(snippet.authorEmail, snippet.title, snippet.id).catch(() => {});
+      if (status === "approved") {
+        db.select({ count: count() }).from(snippetsTable).where(eq(snippetsTable.status, "approved")).then(([row]) => {
+          sendApprovalEmail(snippet.authorEmail, snippet.title, snippet.id, snippet.slug, Number(row?.count ?? 0)).catch(() => {});
+        }).catch(() => {
+          sendApprovalEmail(snippet.authorEmail, snippet.title, snippet.id, snippet.slug).catch(() => {});
+        });
+      }
       else if (status === "rejected") sendRejectionEmail(snippet.authorEmail, snippet.title, rejectReason).catch(() => {});
       res.json({ ...updated, tags: updated.tags ?? [], createdAt: updated.createdAt.toISOString(), updatedAt: updated.updatedAt.toISOString() });
     } catch {

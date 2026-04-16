@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useParams, Link, useLocation } from "wouter";
 import { format } from "date-fns";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, Copy, Check, Download, Clock, Tag, Code2, AlertTriangle, Share2, Eye, Lock, KeyRound, EyeOff, Loader2, LockOpen, ShieldOff } from "lucide-react";
+import { ArrowLeft, Copy, Check, Download, Clock, Tag, Code2, AlertTriangle, Share2, Eye, Lock, KeyRound, EyeOff, Loader2, LockOpen, ShieldOff, Link2, Hash, ExternalLink } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 
@@ -310,6 +310,144 @@ function DisableLockModal({
   );
 }
 
+function ShareModal({
+  snippetId,
+  snippetSlug,
+  snippetTitle,
+  onClose,
+}: {
+  snippetId: string;
+  snippetSlug: string | null;
+  snippetTitle: string;
+  onClose: () => void;
+}) {
+  const { toast } = useToast();
+  const [copiedId, setCopiedId] = useState(false);
+  const [copiedSlug, setCopiedSlug] = useState(false);
+
+  const baseUrl = typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname.split("/snippet/")[0]}` : "";
+  const idUrl = `${baseUrl}/snippet/${snippetId}`;
+  const slugUrl = snippetSlug ? `${baseUrl}/snippet/${snippetSlug}` : null;
+
+  const copyUrl = async (url: string, isSlug: boolean) => {
+    await navigator.clipboard.writeText(url);
+    if (isSlug) {
+      setCopiedSlug(true);
+      setTimeout(() => setCopiedSlug(false), 2000);
+    } else {
+      setCopiedId(true);
+      setTimeout(() => setCopiedId(false), 2000);
+    }
+    toast({ title: "Link tersalin!", duration: 1600 });
+  };
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 12 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.92 }}
+        transition={{ duration: 0.16 }}
+        className="w-full max-w-md glass-card rounded-2xl border border-border/60 shadow-2xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border/40">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-blue-500/15 flex items-center justify-center">
+              <Share2 className="w-3.5 h-3.5 text-blue-400" />
+            </div>
+            <div>
+              <h3 className="font-heading font-semibold text-sm text-foreground">Bagikan Snippet</h3>
+              <p className="text-[10px] text-muted-foreground/60 truncate max-w-[220px]">{snippetTitle}</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="w-7 h-7 rounded-lg hover:bg-white/8 flex items-center justify-center text-muted-foreground hover:text-foreground transition-all"
+          >
+            <ExternalLink className="w-3.5 h-3.5 rotate-180" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-3">
+          {/* ID 1: Slug URL — PRIMARY / recommended */}
+          {slugUrl && (
+            <div className="rounded-xl border border-blue-500/25 bg-blue-500/5 overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-1.5 border-b border-blue-500/15 bg-blue-500/8">
+                <div className="flex items-center gap-1.5">
+                  <Hash className="w-3 h-3 text-blue-400" />
+                  <span className="text-[10.5px] text-blue-300 font-medium">ID Nama Snippet</span>
+                  <span className="text-[9px] bg-blue-500/20 text-blue-300 border border-blue-500/30 px-1.5 py-0.5 rounded-full font-semibold tracking-wide">URL UTAMA</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 px-3 py-2.5">
+                <span className="text-[11px] text-blue-200/80 truncate flex-1 font-mono leading-relaxed">{slugUrl}</span>
+                <button
+                  onClick={() => copyUrl(slugUrl, true)}
+                  className={cn(
+                    "shrink-0 h-7 px-3 rounded-lg text-[10.5px] font-medium border transition-all flex items-center gap-1",
+                    copiedSlug
+                      ? "border-green-500/30 bg-green-500/10 text-green-400"
+                      : "border-blue-500/30 bg-blue-500/15 text-blue-300 hover:bg-blue-500/25",
+                  )}
+                >
+                  {copiedSlug ? <><Check className="w-3 h-3" />Tersalin</> : <><Copy className="w-3 h-3" />Salin</>}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ID 2: Random ID URL — permanent */}
+          <div className="rounded-xl border border-border/40 bg-secondary/20 overflow-hidden">
+            <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border/25 bg-secondary/30">
+              <Link2 className="w-3 h-3 text-muted-foreground/60" />
+              <span className="text-[10.5px] text-muted-foreground/70 font-medium">ID Unik Acak</span>
+              <span className="text-[9px] bg-secondary/60 text-muted-foreground/50 border border-border/40 px-1.5 py-0.5 rounded-full font-semibold tracking-wide">PERMANEN</span>
+            </div>
+            <div className="flex items-center gap-2 px-3 py-2.5">
+              <span className="text-[11px] text-muted-foreground truncate flex-1 font-mono leading-relaxed">{idUrl}</span>
+              <button
+                onClick={() => copyUrl(idUrl, false)}
+                className={cn(
+                  "shrink-0 h-7 px-3 rounded-lg text-[10.5px] font-medium border transition-all flex items-center gap-1",
+                  copiedId
+                    ? "border-green-500/30 bg-green-500/10 text-green-400"
+                    : "border-border/50 bg-secondary/50 text-muted-foreground hover:text-foreground hover:bg-white/8",
+                )}
+              >
+                {copiedId ? <><Check className="w-3 h-3" />Tersalin</> : <><Copy className="w-3 h-3" />Salin</>}
+              </button>
+            </div>
+          </div>
+
+          <p className="text-[10px] text-muted-foreground/40 text-center leading-relaxed">
+            URL Utama (nama snippet) lebih mudah dibaca & diingat.<br />
+            URL Permanen (ID acak) selalu berfungsi meski judul berubah.
+          </p>
+
+          <button
+            onClick={() => { copyUrl(slugUrl || idUrl, !!slugUrl); }}
+            className="w-full h-9 rounded-xl bg-blue-600/20 border border-blue-500/30 text-blue-300 text-xs font-medium hover:bg-blue-600/30 transition-colors flex items-center justify-center gap-1.5"
+          >
+            <Copy className="w-3.5 h-3.5" />
+            Salin URL Utama
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
 export default function SnippetDetail() {
   const params = useParams();
   const id = params.id as string;
@@ -319,6 +457,7 @@ export default function SnippetDetail() {
   const [linkCopied, setLinkCopied] = useState(false);
   const [showUnlock, setShowUnlock] = useState(false);
   const [showDisableLock, setShowDisableLock] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
   const [lockDisabledLocally, setLockDisabledLocally] = useState(false);
   const [unlockedCode, setUnlockedCode] = useState<string | null>(null);
 
@@ -374,10 +513,7 @@ export default function SnippetDetail() {
   };
 
   const handleShareLink = () => {
-    navigator.clipboard.writeText(window.location.href);
-    setLinkCopied(true);
-    setTimeout(() => setLinkCopied(false), 2000);
-    toast({ title: "Link tersalin!", duration: 1800 });
+    setShowShareModal(true);
   };
 
   const handleOpenRaw = () => {
@@ -433,6 +569,14 @@ export default function SnippetDetail() {
             snippetTitle={s.title}
             onDisabled={() => { setShowDisableLock(false); setLockDisabledLocally(true); }}
             onClose={() => setShowDisableLock(false)}
+          />
+        )}
+        {showShareModal && (
+          <ShareModal
+            snippetId={id}
+            snippetSlug={(s as any).slug ?? null}
+            snippetTitle={s.title}
+            onClose={() => setShowShareModal(false)}
           />
         )}
       </AnimatePresence>

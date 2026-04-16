@@ -5,11 +5,15 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { motion, AnimatePresence } from "framer-motion";
-import { Upload as UploadIcon, CheckCircle2, Code2, AlertCircle, Send, ChevronDown, Search, X, Lock, KeyRound, Eye, EyeOff } from "lucide-react";
+import {
+  Upload as UploadIcon, CheckCircle2, Code2, AlertCircle, Send,
+  ChevronDown, Search, X, Lock, KeyRound, Eye, EyeOff, AlertTriangle, Info,
+} from "lucide-react";
 
 import { useCreateSnippet, getListSnippetsQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { useDebounce } from "@/hooks/use-debounce";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -62,13 +66,13 @@ function LanguagePicker({
   const calcPos = useCallback(() => {
     if (!triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
-    const dropH = 248; // ~50px search + 5×36px items + padding
+    const dropH = 248;
     const spaceBelow = window.innerHeight - rect.bottom;
     const openUp = spaceBelow < dropH && rect.top > dropH;
     setDropPos({
       top: openUp ? rect.top - dropH - 4 : rect.bottom + 4,
       left: rect.left,
-      width: rect.width,
+      width: Math.max(rect.width, 180),
       openUp,
     });
   }, []);
@@ -84,15 +88,11 @@ function LanguagePicker({
     }
   };
 
-  // Close on outside click, scroll, or resize
   useEffect(() => {
     if (!open) return;
     const close = (e: Event) => {
       const target = e.target as Node;
-      if (
-        triggerRef.current?.contains(target) ||
-        dropRef.current?.contains(target)
-      ) return;
+      if (triggerRef.current?.contains(target) || dropRef.current?.contains(target)) return;
       setOpen(false);
       setQuery("");
     };
@@ -119,7 +119,6 @@ function LanguagePicker({
       }}
       className="bg-card border border-border/60 rounded-xl shadow-2xl overflow-hidden"
     >
-      {/* Search bar */}
       <div className="p-2 border-b border-border/40">
         <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-background/60">
           <Search className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
@@ -137,8 +136,7 @@ function LanguagePicker({
           )}
         </div>
       </div>
-      {/* List: max 5 items visible = 5 × ~36px = 180px */}
-      <div className="overflow-y-auto py-1" style={{ maxHeight: "180px" }}>
+      <div className="overflow-y-auto py-1" style={{ maxHeight: "200px" }}>
         {filtered.length === 0 ? (
           <div className="px-4 py-3 text-xs text-muted-foreground text-center">Tidak ditemukan</div>
         ) : (
@@ -193,6 +191,62 @@ function LanguagePicker({
   );
 }
 
+// Title duplicate check hook — returns suggestion data from API
+function useTitleDuplicateCheck(title: string) {
+  const [isDuplicate, setIsDuplicate] = useState(false);
+  const [existingId, setExistingId] = useState<string | null>(null);
+  const [existingSlug, setExistingSlug] = useState<string | null>(null);
+  const [suggestedTitle, setSuggestedTitle] = useState<string | null>(null);
+  const [suggestedSlug, setSuggestedSlug] = useState<string | null>(null);
+  const [previewSlug, setPreviewSlug] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  const debouncedTitle = useDebounce(title.trim(), 600);
+
+  useEffect(() => {
+    if (!debouncedTitle || debouncedTitle.length < 3) {
+      setIsDuplicate(false);
+      setExistingId(null);
+      setExistingSlug(null);
+      setSuggestedTitle(null);
+      setSuggestedSlug(null);
+      setPreviewSlug(null);
+      return;
+    }
+
+    let cancelled = false;
+    setChecking(true);
+
+    fetch(`/api/snippets/check-title?title=${encodeURIComponent(debouncedTitle)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return;
+        setIsDuplicate(data.isDuplicate ?? false);
+        setExistingId(data.existingId ?? null);
+        setExistingSlug(data.existingSlug ?? null);
+        setSuggestedTitle(data.suggestedTitle ?? null);
+        setSuggestedSlug(data.suggestedSlug ?? null);
+        setPreviewSlug(data.previewSlug ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setIsDuplicate(false);
+          setExistingId(null);
+          setExistingSlug(null);
+          setSuggestedTitle(null);
+          setSuggestedSlug(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setChecking(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [debouncedTitle]);
+
+  return { isDuplicate, existingId, existingSlug, suggestedTitle, suggestedSlug, previewSlug, checking };
+}
+
 export default function Upload() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
@@ -215,6 +269,10 @@ export default function Upload() {
       authorEmail: "",
     },
   });
+
+  const titleValue = form.watch("title");
+  const { isDuplicate, existingId, existingSlug, suggestedTitle, suggestedSlug, previewSlug, checking } = useTitleDuplicateCheck(titleValue);
+  const [duplicateAcknowledged, setDuplicateAcknowledged] = useState(false);
 
   const createSnippet = useCreateSnippet();
 
@@ -241,9 +299,23 @@ export default function Upload() {
         }
       }
 
+      // If title is duplicate and user hasn't chosen suggested name yet,
+      // auto-apply suggestedTitle (backend will also handle uniqueness via slug)
+      let finalTitle = values.title;
+      if (isDuplicate && suggestedTitle && !duplicateAcknowledged) {
+        finalTitle = suggestedTitle;
+        form.setValue("title", suggestedTitle);
+        toast({
+          title: "Judul diperbarui otomatis",
+          description: `Nama snippet diubah ke "${suggestedTitle}" untuk menghindari duplikat.`,
+          duration: 3500,
+        });
+      }
+
       await createSnippet.mutateAsync({
         data: {
           ...values,
+          title: finalTitle,
           tags: tagsArray,
           ...(isLocked ? { isLocked: true, lockType, lockPassword } : { isLocked: false }),
         } as any,
@@ -323,21 +395,100 @@ export default function Upload() {
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6 relative z-10">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-5">
+                {/* Title with duplicate check */}
                 <FormField
                   control={form.control}
                   name="title"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Judul Snippet</FormLabel>
+                      <FormLabel className="flex items-center justify-between">
+                        <span>Judul Snippet</span>
+                        {checking && (
+                          <span className="text-[10px] text-muted-foreground/60 font-normal">Memeriksa...</span>
+                        )}
+                      </FormLabel>
                       <FormControl>
-                        <Input placeholder="cth. React useDebounce Hook" {...field} className="bg-background/50" data-testid="input-title" />
+                        <div className="space-y-1.5">
+                          <Input
+                            placeholder="cth. React useDebounce Hook"
+                            {...field}
+                            className={cn(
+                              "bg-background/50",
+                              isDuplicate && "border-amber-500/50 focus-visible:ring-amber-500/30",
+                            )}
+                            data-testid="input-title"
+                          />
+                          <AnimatePresence>
+                            {isDuplicate && existingId && (
+                              <motion.div
+                                initial={{ opacity: 0, y: -4 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -4 }}
+                                className="rounded-xl border border-amber-500/30 bg-amber-500/8 p-3 space-y-2.5"
+                              >
+                                <div className="flex items-start gap-2">
+                                  <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
+                                  <div className="space-y-1 flex-1 min-w-0">
+                                    <p className="text-[11px] text-amber-300 font-medium leading-relaxed">
+                                      Judul ini sudah digunakan!
+                                    </p>
+                                    <p className="text-[10.5px] text-amber-400/70 leading-relaxed">
+                                      Ganti dengan nama lain, atau sistem akan otomatis menambahkan suffix agar unik.
+                                    </p>
+                                    {suggestedTitle && (
+                                      <div className="flex items-center gap-1 mt-1">
+                                        <span className="text-[10px] text-muted-foreground/60">Saran:</span>
+                                        <code className="text-[10px] text-blue-400 font-mono bg-blue-500/10 px-1 py-0.5 rounded">{suggestedTitle}</code>
+                                        <span className="text-[10px] text-muted-foreground/40">→</span>
+                                        <code className="text-[10px] text-muted-foreground/50 font-mono">/snippet/{suggestedSlug}</code>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="flex gap-2">
+                                  {suggestedTitle && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        form.setValue("title", suggestedTitle, { shouldValidate: true });
+                                        setDuplicateAcknowledged(true);
+                                      }}
+                                      className="flex-1 h-7 rounded-lg bg-blue-500/15 border border-blue-500/30 text-blue-400 text-[11px] font-medium hover:bg-blue-500/25 transition-colors"
+                                    >
+                                      Pakai &quot;{suggestedTitle}&quot;
+                                    </button>
+                                  )}
+                                  <a
+                                    href={`/snippet/${existingSlug || existingId}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex items-center justify-center h-7 px-3 rounded-lg border border-border/40 text-[11px] text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
+                                  >
+                                    Lihat asli ↗
+                                  </a>
+                                </div>
+                              </motion.div>
+                            )}
+                            {!isDuplicate && previewSlug && titleValue.length >= 3 && (
+                              <motion.div
+                                initial={{ opacity: 0, y: -4 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0 }}
+                                className="flex items-center gap-1.5 text-[10.5px] text-muted-foreground/50"
+                              >
+                                <span>URL:</span>
+                                <code className="font-mono text-blue-400/60">/snippet/{previewSlug}</code>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
                       </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <FormField
                     control={form.control}
                     name="authorName"
@@ -367,7 +518,7 @@ export default function Upload() {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <FormField
                     control={form.control}
                     name="language"
@@ -387,7 +538,7 @@ export default function Upload() {
                     name="tags"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Tag (pisahkan koma)</FormLabel>
+                        <FormLabel>Tag <span className="text-muted-foreground font-normal text-[11px]">(pisahkan koma)</span></FormLabel>
                         <FormControl>
                           <Input placeholder="react, hooks, utilitas" {...field} className="bg-background/50" data-testid="input-tags" />
                         </FormControl>
@@ -406,7 +557,7 @@ export default function Upload() {
                       <FormControl>
                         <Textarea
                           placeholder="Jelaskan secara singkat apa yang dilakukan snippet ini..."
-                          className="resize-none h-[120px] bg-background/50"
+                          className="resize-none h-[100px] sm:h-[120px] bg-background/50"
                           {...field}
                           data-testid="input-description"
                         />
@@ -421,26 +572,34 @@ export default function Upload() {
                 <FormField
                   control={form.control}
                   name="code"
-                  render={({ field }) => (
-                    <FormItem className="flex-1 flex flex-col">
-                      <FormLabel className="flex justify-between items-center">
-                        Kode
-                        <span className="text-xs font-normal text-muted-foreground flex items-center gap-1">
-                          <Code2 className="w-3 h-3" /> Gunakan font monospace
-                        </span>
-                      </FormLabel>
-                      <FormControl className="flex-1">
-                        <Textarea
-                          placeholder="// Tempel kode kamu di sini..."
-                          className="font-mono text-sm resize-none h-[360px] md:h-full bg-background/80 border-primary/20 focus-visible:ring-primary focus-visible:border-primary/50"
-                          {...field}
-                          spellCheck={false}
-                          data-testid="input-code"
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
+                  render={({ field }) => {
+                    const MIN_H = 300;
+                    const LINE_H = 22;
+                    const lines = (field.value || "").split("\n").length;
+                    const autoH = Math.max(MIN_H, lines * LINE_H + 48);
+                    return (
+                      <FormItem className="flex-1 flex flex-col">
+                        <FormLabel className="flex justify-between items-center">
+                          Kode
+                          <span className="text-xs font-normal text-muted-foreground flex items-center gap-1">
+                            <Code2 className="w-3 h-3" />
+                            <span className="hidden sm:inline">Gunakan font monospace</span>
+                          </span>
+                        </FormLabel>
+                        <FormControl className="flex-1">
+                          <Textarea
+                            placeholder="// Tempel kode kamu di sini..."
+                            className="font-mono text-sm resize-none bg-background/80 border-primary/20 focus-visible:ring-primary focus-visible:border-primary/50 transition-[height] duration-150"
+                            style={{ height: `${autoH}px`, minHeight: `${MIN_H}px` }}
+                            {...field}
+                            spellCheck={false}
+                            data-testid="input-code"
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    );
+                  }}
                 />
               </div>
             </div>
@@ -485,7 +644,6 @@ export default function Upload() {
                       className="overflow-hidden"
                     >
                       <div className="pt-4 mt-4 border-t border-amber-500/20 space-y-3">
-                        {/* Lock type selector */}
                         <div className="flex gap-2">
                           {(["password", "pin"] as const).map((type) => (
                             <button
@@ -503,7 +661,6 @@ export default function Upload() {
                             </button>
                           ))}
                         </div>
-                        {/* Password/PIN input */}
                         <div className="relative">
                           <Input
                             type={showLockPw ? "text" : (lockType === "pin" ? "tel" : "password")}
