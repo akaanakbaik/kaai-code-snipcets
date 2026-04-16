@@ -177,7 +177,7 @@ router.get("/stats/top-copied", async (req, res) => {
 // GET /api/stats/timeline — monthly submission counts for last 12 months
 router.get("/stats/timeline", async (_req, res) => {
   try {
-    const rows = await db.execute(sql`
+    const result = await db.execute(sql`
       SELECT
         TO_CHAR(created_at, 'YYYY-MM') AS month,
         COUNT(*)::int AS total,
@@ -186,8 +186,8 @@ router.get("/stats/timeline", async (_req, res) => {
       WHERE created_at >= NOW() - INTERVAL '12 months'
       GROUP BY month
       ORDER BY month ASC
-    `);
-    res.json(rows.rows ?? rows);
+    `) as any;
+    res.json(result?.rows ?? result ?? []);
   } catch (err) {
     logger.error({ err }, "[stats] GET /api/stats/timeline failed");
     res.status(500).json({ error: "DB_ERROR", message: "Gagal mengambil data timeline" });
@@ -197,7 +197,7 @@ router.get("/stats/timeline", async (_req, res) => {
 // GET /api/stats/engagement — avg views, copies, engagement metrics
 router.get("/stats/engagement", async (_req, res) => {
   try {
-    const [row] = await db.execute(sql`
+    const result = await db.execute(sql`
       SELECT
         COUNT(*)::int AS total,
         COALESCE(AVG(view_count), 0)::float AS avg_views,
@@ -215,7 +215,7 @@ router.get("/stats/engagement", async (_req, res) => {
       FROM snippets
       WHERE status = 'approved'
     `) as any;
-    const data = (row as any)?.rows?.[0] ?? row;
+    const data = result?.rows?.[0] ?? result?.[0] ?? {};
     res.json({
       totalSnippets: Number(data?.total ?? 0),
       avgViews: Math.round(Number(data?.avg_views ?? 0) * 10) / 10,
