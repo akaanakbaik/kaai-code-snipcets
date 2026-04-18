@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useSEO } from "@/hooks/use-seo";
 import { createPortal } from "react-dom";
 import { useLocation } from "wouter";
 import { useForm } from "react-hook-form";
@@ -248,6 +249,26 @@ function useTitleDuplicateCheck(title: string) {
 }
 
 export default function Upload() {
+  useSEO({
+    title: "Upload Code Snippet",
+    description: "Bagikan code snippet kamu ke komunitas developer Indonesia. Upload kode JavaScript, TypeScript, Python, dan bahasa pemrograman lainnya secara gratis dan mudah.",
+    keywords: "upload snippet, bagikan kode, share code, submit snippet, kontribusi developer, kode gratis indonesia",
+    url: "/upload",
+    type: "website",
+    structuredData: {
+      "@context": "https://schema.org",
+      "@type": "WebPage",
+      "name": "Upload Code Snippet | Kaai Code Snippet",
+      "url": "https://codes-snippet.kaai.my.id/upload",
+      "description": "Bagikan code snippet kamu ke komunitas developer Indonesia.",
+      "potentialAction": {
+        "@type": "CreateAction",
+        "target": "https://codes-snippet.kaai.my.id/upload",
+        "name": "Upload Code Snippet",
+      },
+    },
+  });
+
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();

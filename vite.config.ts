@@ -70,6 +70,10 @@ export default defineConfig({
         target: `http://localhost:${process.env.API_PORT ?? 3000}`,
         changeOrigin: true,
       },
+      "/sitemap.xml": {
+        target: `http://localhost:${process.env.API_PORT ?? 3000}`,
+        changeOrigin: true,
+      },
     },
   },
   preview: {

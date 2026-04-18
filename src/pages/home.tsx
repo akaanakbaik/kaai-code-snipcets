@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useSEO, SITE_URL } from "@/hooks/use-seo";
 import { Link } from "wouter";
 import {
   Search, Hash, Code2, Clock, Copy, ChevronDown, X, Eye,
@@ -245,6 +246,37 @@ function getFirstLetter(title: string): string {
 }
 
 export default function Home() {
+  useSEO({
+    description: "Kumpulan code snippet siap pakai untuk developer Indonesia dan mancanegara. Cari, salin, dan bagikan kode JavaScript, TypeScript, Python, Go, PHP, dan lainnya secara gratis.",
+    keywords: "code snippet, kode program gratis, javascript snippet, typescript snippet, python snippet, developer indonesia, open source, share code, programming tools",
+    url: "/",
+    type: "website",
+    structuredData: [
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "Kaai Code Snippet",
+        "alternateName": ["Kaai Codes", "codes-snippet.kaai"],
+        "url": "https://codes-snippet.kaai.my.id",
+        "description": "Kumpulan code snippet siap pakai untuk developer Indonesia dan mancanegara.",
+        "inLanguage": ["id", "en"],
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": { "@type": "EntryPoint", "urlTemplate": `${SITE_URL}/?search={search_term_string}` },
+          "query-input": "required name=search_term_string",
+        },
+      },
+      {
+        "@context": "https://schema.org",
+        "@type": "CollectionPage",
+        "name": "Library Code Snippet | Kaai Code Snippet",
+        "url": "https://codes-snippet.kaai.my.id",
+        "description": "Koleksi code snippet gratis untuk developer Indonesia — JavaScript, TypeScript, Python, Go, PHP, dan lebih banyak lagi.",
+        "about": { "@type": "Thing", "name": "Code Snippets", "description": "Koleksi kode program siap pakai" },
+      },
+    ],
+  });
+
   const [search, setSearch] = useState("");
   const [language, setLanguage] = useState<string>("all");
   const [page, setPage] = useState(1);

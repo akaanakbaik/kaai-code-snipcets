@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useSEO, SITE_URL, SITE_NAME } from "@/hooks/use-seo";
 import { useParams, Link, useLocation } from "wouter";
 import { format } from "date-fns";
 import { motion, AnimatePresence } from "framer-motion";
@@ -471,6 +472,51 @@ export default function SnippetDetail() {
   const hasCode = isLocked && !lockIsDisabled ? (unlockedCode !== null) : (!!s?.code);
   const effectivelyLocked = isLocked && !lockIsDisabled;
   const displayCode = effectivelyLocked ? (unlockedCode ?? "") : (s?.code ?? "");
+
+  const snippetSlug = (s as any)?.slug ?? id;
+  const snippetUrl = `/snippet/${snippetSlug}`;
+  useSEO({
+    title: s ? `${s.title} — ${s.language} snippet` : undefined,
+    description: s
+      ? `${s.description || `Snippet ${s.title} dalam ${s.language}`}. Ditulis oleh ${s.authorName}. Tag: ${s.tags?.slice(0, 5).join(", ")}.`
+      : undefined,
+    keywords: s
+      ? `${s.title}, ${s.language} snippet, ${s.tags?.join(", ")}, code snippet, kode ${s.language}, ${s.authorName}`
+      : undefined,
+    url: s ? snippetUrl : undefined,
+    type: "article",
+    structuredData: s
+      ? {
+          "@context": "https://schema.org",
+          "@type": "SoftwareSourceCode",
+          "name": s.title,
+          "description": s.description,
+          "url": `${SITE_URL}${snippetUrl}`,
+          "codeRepository": `${SITE_URL}${snippetUrl}`,
+          "programmingLanguage": {
+            "@type": "ComputerLanguage",
+            "name": s.language,
+          },
+          "author": {
+            "@type": "Person",
+            "name": s.authorName,
+          },
+          "dateCreated": s.createdAt,
+          "dateModified": s.updatedAt,
+          "keywords": s.tags?.join(", "),
+          "publisher": {
+            "@type": "Organization",
+            "name": SITE_NAME,
+            "url": SITE_URL,
+          },
+          "isPartOf": {
+            "@type": "WebSite",
+            "name": SITE_NAME,
+            "url": SITE_URL,
+          },
+        }
+      : undefined,
+  });
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });

@@ -1,51 +1,84 @@
+import { Suspense, lazy } from "react";
 import { Switch, Route, Router as WouterRouter } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/theme-provider";
+import { Skeleton } from "@/components/ui/skeleton";
 import NotFound from "@/pages/not-found";
 
 import Layout from "@/components/layout";
+
+// Critical routes — eager loaded (visible on first paint)
 import Home from "@/pages/home";
 import Upload from "@/pages/upload";
 import SnippetDetail from "@/pages/snippet-detail";
-import Admin from "@/pages/admin";
-import AdminLogin from "@/pages/admin-login";
-import Stats from "@/pages/stats";
-import Terms from "@/pages/terms";
-import Privacy from "@/pages/privacy";
-import RawView from "@/pages/raw";
-import Docs from "@/pages/docs";
+
+// Non-critical routes — lazy loaded (reduces initial bundle ~40%)
+const Admin = lazy(() => import("@/pages/admin"));
+const AdminLogin = lazy(() => import("@/pages/admin-login"));
+const Stats = lazy(() => import("@/pages/stats"));
+const Terms = lazy(() => import("@/pages/terms"));
+const Privacy = lazy(() => import("@/pages/privacy"));
+const RawView = lazy(() => import("@/pages/raw"));
+const Docs = lazy(() => import("@/pages/docs"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { retry: 1, staleTime: 30_000 },
+    queries: {
+      retry: 1,
+      staleTime: 30_000,
+      refetchOnWindowFocus: false,
+    },
   },
 });
 
-function WithLayout({ children }: { children: React.ReactNode }) {
-  return <Layout>{children}</Layout>;
+function PageLoader() {
+  return (
+    <div className="space-y-4 p-6 max-w-5xl mx-auto w-full">
+      <Skeleton className="h-8 w-48 rounded-lg" />
+      <Skeleton className="h-4 w-full" />
+      <Skeleton className="h-4 w-3/4" />
+      <Skeleton className="h-64 w-full rounded-xl" />
+    </div>
+  );
 }
 
 function Router() {
   return (
     <Switch>
-      {/* Raw view — no layout, standalone page */}
-      <Route path="/raw/:id" component={RawView} />
+      {/* Raw view — no layout, standalone */}
+      <Route path="/raw/:id">
+        <Suspense fallback={null}>
+          <RawView />
+        </Suspense>
+      </Route>
 
-      {/* All other routes use the sidebar layout */}
+      {/* All other routes use the shared layout */}
       <Route>
         <Layout>
           <Switch>
             <Route path="/" component={Home} />
             <Route path="/upload" component={Upload} />
             <Route path="/snippet/:id" component={SnippetDetail} />
-            <Route path="/admin/login" component={AdminLogin} />
-            <Route path="/admin" component={Admin} />
-            <Route path="/stats" component={Stats} />
-            <Route path="/terms" component={Terms} />
-            <Route path="/privacy" component={Privacy} />
-            <Route path="/docs" component={Docs} />
+            <Route path="/admin/login">
+              <Suspense fallback={<PageLoader />}><AdminLogin /></Suspense>
+            </Route>
+            <Route path="/admin">
+              <Suspense fallback={<PageLoader />}><Admin /></Suspense>
+            </Route>
+            <Route path="/stats">
+              <Suspense fallback={<PageLoader />}><Stats /></Suspense>
+            </Route>
+            <Route path="/terms">
+              <Suspense fallback={<PageLoader />}><Terms /></Suspense>
+            </Route>
+            <Route path="/privacy">
+              <Suspense fallback={<PageLoader />}><Privacy /></Suspense>
+            </Route>
+            <Route path="/docs">
+              <Suspense fallback={<PageLoader />}><Docs /></Suspense>
+            </Route>
             <Route component={NotFound} />
           </Switch>
         </Layout>

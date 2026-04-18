@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useSEO, SITE_URL } from "@/hooks/use-seo";
 import { useGetStats, useGetLanguageStats, useGetRecentSnippets } from "@workspace/api-client-react";
 import {
   BarChart3, Code2, Users, FileCode, Clock, CheckCircle2, TrendingUp,
@@ -140,6 +141,21 @@ function MonthlyChart({ data }: { data: TimelineEntry[] }) {
 }
 
 export default function Stats() {
+  useSEO({
+    title: "Statistik Platform",
+    description: "Lihat statistik lengkap Kaai Code Snippet — jumlah snippet, snippet terpopuler, penulis aktif, tag trending, dan aktivitas bulanan komunitas developer Indonesia.",
+    keywords: "statistik snippet, snippet terpopuler, developer aktif, tag trending, kode snippet indonesia",
+    url: "/stats",
+    type: "website",
+    structuredData: {
+      "@context": "https://schema.org",
+      "@type": "WebPage",
+      "name": "Statistik Platform | Kaai Code Snippet",
+      "url": `${SITE_URL}/stats`,
+      "description": "Statistik lengkap platform code snippet untuk developer Indonesia.",
+    },
+  });
+
   const [lastUpdated, setLastUpdated] = useState(new Date());
   const [refetchTick, setRefetchTick] = useState(0);
   const [activeTab, setActiveTab] = useState<"viewed" | "copied">("viewed");

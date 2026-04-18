@@ -42,6 +42,51 @@ app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 app.use(globalRateLimit);
 app.use(requestLogger);
+
+// ─── Dynamic Sitemap ──────────────────────────────────────────────────────────
+app.get("/sitemap.xml", async (_req, res) => {
+  try {
+    const result = await pool.query<{ slug: string; updated_at: Date }>(
+      `SELECT slug, updated_at FROM snippets WHERE status = 'approved' AND slug IS NOT NULL ORDER BY updated_at DESC LIMIT 5000`
+    );
+    const BASE = "https://codes-snippet.kaai.my.id";
+    const today = new Date().toISOString().slice(0, 10);
+
+    const staticUrls = [
+      { loc: `${BASE}/`, changefreq: "daily", priority: "1.0", lastmod: today },
+      { loc: `${BASE}/upload`, changefreq: "monthly", priority: "0.8", lastmod: today },
+      { loc: `${BASE}/stats`, changefreq: "daily", priority: "0.7", lastmod: today },
+      { loc: `${BASE}/docs`, changefreq: "monthly", priority: "0.6", lastmod: today },
+      { loc: `${BASE}/terms`, changefreq: "yearly", priority: "0.3", lastmod: today },
+      { loc: `${BASE}/privacy`, changefreq: "yearly", priority: "0.3", lastmod: today },
+    ];
+
+    const snippetUrls = result.rows.map((r) => ({
+      loc: `${BASE}/snippet/${r.slug}`,
+      changefreq: "weekly",
+      priority: "0.9",
+      lastmod: r.updated_at.toISOString().slice(0, 10),
+    }));
+
+    const allUrls = [...staticUrls, ...snippetUrls];
+    const urlEntries = allUrls
+      .map(
+        (u) =>
+          `  <url>\n    <loc>${u.loc}</loc>\n    <lastmod>${u.lastmod}</lastmod>\n    <changefreq>${u.changefreq}</changefreq>\n    <priority>${u.priority}</priority>\n  </url>`
+      )
+      .join("\n");
+
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"\n        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"\n        xsi:schemaLocation="http://www.sitemaps.org/schemas/sitemap/0.9 http://www.sitemaps.org/schemas/sitemap/0.9/sitemap.xsd">\n${urlEntries}\n</urlset>`;
+
+    res.set("Content-Type", "application/xml; charset=utf-8");
+    res.set("Cache-Control", "public, max-age=3600, s-maxage=3600");
+    res.send(xml);
+  } catch (err) {
+    logger.error({ err }, "[sitemap] Failed to generate sitemap");
+    res.status(500).send("<?xml version=\"1.0\" encoding=\"UTF-8\"?><urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"></urlset>");
+  }
+});
+
 app.use("/api", router);
 app.use(safeErrorHandler as any);
 
