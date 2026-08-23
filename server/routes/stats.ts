@@ -1,10 +1,30 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { db } from "../lib/db.js";
 import { snippetsTable } from "../lib/schema.js";
-import { eq, count, desc, sum, sql } from "drizzle-orm";
+import { eq, count, desc, asc, sum, sql } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 
 const router = Router();
+const STATS_CACHE_TTL_MS = 30_000;
+const statsCache = new Map<string, { expiresAt: number; value: unknown }>();
+const statsInFlight = new Map<string, Promise<unknown>>();
+
+async function getCachedStats<T>(key: string, producer: () => Promise<T>): Promise<T> {
+  const cached = statsCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.value as T;
+  const active = statsInFlight.get(key);
+  if (active) return active as Promise<T>;
+  const request = producer().then((value) => {
+    statsCache.set(key, { expiresAt: Date.now() + STATS_CACHE_TTL_MS, value });
+    return value;
+  }).finally(() => statsInFlight.delete(key));
+  statsInFlight.set(key, request);
+  return request;
+}
+
+function setStatsCacheHeaders(res: Response) {
+  res.set("Cache-Control", "public, max-age=15, s-maxage=15, stale-while-revalidate=30");
+}
 
 function formatSnippet(snippet: typeof snippetsTable.$inferSelect) {
   return {
@@ -16,30 +36,46 @@ function formatSnippet(snippet: typeof snippetsTable.$inferSelect) {
   };
 }
 
+function formatStatsSnippet(snippet: Pick<typeof snippetsTable.$inferSelect, "id" | "slug" | "title" | "language" | "authorName" | "viewCount" | "copyCount" | "createdAt">) {
+  return {
+    id: snippet.id,
+    slug: snippet.slug,
+    title: snippet.title,
+    language: snippet.language,
+    authorName: snippet.authorName,
+    viewCount: snippet.viewCount,
+    copyCount: snippet.copyCount,
+    createdAt: snippet.createdAt.toISOString(),
+  };
+}
+
 // GET /api/stats — main statistics
 router.get("/stats", async (_req, res) => {
   try {
-    const [summary] = await db.select({
-      totalSnippets: count(),
-      pendingSnippets: sql<number>`COUNT(*) FILTER (WHERE ${snippetsTable.status} = 'pending')`,
-      approvedSnippets: sql<number>`COUNT(*) FILTER (WHERE ${snippetsTable.status} = 'approved')`,
-      rejectedSnippets: sql<number>`COUNT(*) FILTER (WHERE ${snippetsTable.status} = 'rejected')`,
-      totalAuthors: sql<number>`COUNT(DISTINCT ${snippetsTable.authorEmail}) FILTER (WHERE ${snippetsTable.status} = 'approved')`,
-      totalLanguages: sql<number>`COUNT(DISTINCT ${snippetsTable.language}) FILTER (WHERE ${snippetsTable.status} = 'approved')`,
-      totalViews: sql<number>`COALESCE(SUM(${snippetsTable.viewCount}) FILTER (WHERE ${snippetsTable.status} = 'approved'), 0)`,
-      totalCopies: sql<number>`COALESCE(SUM(${snippetsTable.copyCount}) FILTER (WHERE ${snippetsTable.status} = 'approved'), 0)`,
-    }).from(snippetsTable);
-
-    res.json({
-      totalSnippets: Number(summary?.totalSnippets ?? 0),
-      pendingSnippets: Number(summary?.pendingSnippets ?? 0),
-      approvedSnippets: Number(summary?.approvedSnippets ?? 0),
-      rejectedSnippets: Number(summary?.rejectedSnippets ?? 0),
-      totalAuthors: Number(summary?.totalAuthors ?? 0),
-      totalLanguages: Number(summary?.totalLanguages ?? 0),
-      totalViews: Number(summary?.totalViews ?? 0),
-      totalCopies: Number(summary?.totalCopies ?? 0),
+    const data = await getCachedStats("overview", async () => {
+      const [summary] = await db.select({
+        totalSnippets: count(),
+        pendingSnippets: sql<number>`COUNT(*) FILTER (WHERE ${snippetsTable.status} = 'pending')`,
+        approvedSnippets: sql<number>`COUNT(*) FILTER (WHERE ${snippetsTable.status} = 'approved')`,
+        rejectedSnippets: sql<number>`COUNT(*) FILTER (WHERE ${snippetsTable.status} = 'rejected')`,
+        totalAuthors: sql<number>`COUNT(DISTINCT ${snippetsTable.authorEmail}) FILTER (WHERE ${snippetsTable.status} = 'approved')`,
+        totalLanguages: sql<number>`COUNT(DISTINCT ${snippetsTable.language}) FILTER (WHERE ${snippetsTable.status} = 'approved')`,
+        totalViews: sql<number>`COALESCE(SUM(${snippetsTable.viewCount}) FILTER (WHERE ${snippetsTable.status} = 'approved'), 0)`,
+        totalCopies: sql<number>`COALESCE(SUM(${snippetsTable.copyCount}) FILTER (WHERE ${snippetsTable.status} = 'approved'), 0)`,
+      }).from(snippetsTable);
+      return {
+        totalSnippets: Number(summary?.totalSnippets ?? 0),
+        pendingSnippets: Number(summary?.pendingSnippets ?? 0),
+        approvedSnippets: Number(summary?.approvedSnippets ?? 0),
+        rejectedSnippets: Number(summary?.rejectedSnippets ?? 0),
+        totalAuthors: Number(summary?.totalAuthors ?? 0),
+        totalLanguages: Number(summary?.totalLanguages ?? 0),
+        totalViews: Number(summary?.totalViews ?? 0),
+        totalCopies: Number(summary?.totalCopies ?? 0),
+      };
     });
+    setStatsCacheHeaders(res);
+    res.json(data);
   } catch (err) {
     logger.error({ err }, "[stats] GET /api/stats failed");
     res.status(500).json({ error: "DB_ERROR", message: "Gagal mengambil statistik" });
@@ -49,14 +85,17 @@ router.get("/stats", async (_req, res) => {
 // GET /api/stats/languages — breakdown per language
 router.get("/stats/languages", async (_req, res) => {
   try {
-    const rows = await db
-      .select({ language: snippetsTable.language, count: count() })
-      .from(snippetsTable)
-      .where(eq(snippetsTable.status, "approved"))
-      .groupBy(snippetsTable.language)
-      .orderBy(desc(count()));
-
-    res.json(rows.map((r) => ({ language: r.language, count: Number(r.count) })));
+    const data = await getCachedStats("languages", async () => {
+      const rows = await db
+        .select({ language: snippetsTable.language, count: count() })
+        .from(snippetsTable)
+        .where(eq(snippetsTable.status, "approved"))
+        .groupBy(snippetsTable.language)
+        .orderBy(desc(count()), snippetsTable.language);
+      return rows.map((r) => ({ language: r.language, count: Number(r.count) }));
+    });
+    setStatsCacheHeaders(res);
+    res.json(data);
   } catch (err) {
     logger.error({ err }, "[stats] GET /api/stats/languages failed");
     res.status(500).json({ error: "DB_ERROR", message: "Gagal mengambil statistik bahasa" });
@@ -67,14 +106,26 @@ router.get("/stats/languages", async (_req, res) => {
 router.get("/stats/recent", async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 5, 20);
-    const rows = await db
-      .select()
-      .from(snippetsTable)
-      .where(eq(snippetsTable.status, "approved"))
-      .orderBy(desc(snippetsTable.createdAt))
-      .limit(limit);
-
-    res.json(rows.map(formatSnippet));
+    const data = await getCachedStats(`recent:${limit}`, async () => {
+      const rows = await db
+        .select({
+          id: snippetsTable.id,
+          slug: snippetsTable.slug,
+          title: snippetsTable.title,
+          language: snippetsTable.language,
+          authorName: snippetsTable.authorName,
+          viewCount: snippetsTable.viewCount,
+          copyCount: snippetsTable.copyCount,
+          createdAt: snippetsTable.createdAt,
+        })
+        .from(snippetsTable)
+        .where(eq(snippetsTable.status, "approved"))
+        .orderBy(desc(snippetsTable.createdAt), desc(snippetsTable.id))
+        .limit(limit);
+      return rows.map(formatStatsSnippet);
+    });
+    setStatsCacheHeaders(res);
+    res.json(data);
   } catch (err) {
     logger.error({ err }, "[stats] GET /api/stats/recent failed");
     res.status(500).json({ error: "DB_ERROR", message: "Gagal mengambil snippet terbaru" });
@@ -85,25 +136,28 @@ router.get("/stats/recent", async (req, res) => {
 router.get("/stats/top-authors", async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 10, 50);
-    const rows = await db
-      .select({
-        authorName: snippetsTable.authorName,
-        count: count(),
-        totalViews: sum(snippetsTable.viewCount),
-        totalCopies: sum(snippetsTable.copyCount),
-      })
-      .from(snippetsTable)
-      .where(eq(snippetsTable.status, "approved"))
-      .groupBy(snippetsTable.authorName)
-      .orderBy(desc(count()))
-      .limit(limit);
-
-    res.json(rows.map((r) => ({
-      authorName: r.authorName,
-      snippetCount: Number(r.count),
-      totalViews: Number(r.totalViews ?? 0),
-      totalCopies: Number(r.totalCopies ?? 0),
-    })));
+    const data = await getCachedStats(`top-authors:${limit}`, async () => {
+      const rows = await db
+        .select({
+          authorName: snippetsTable.authorName,
+          count: count(),
+          totalViews: sum(snippetsTable.viewCount),
+          totalCopies: sum(snippetsTable.copyCount),
+        })
+        .from(snippetsTable)
+        .where(eq(snippetsTable.status, "approved"))
+        .groupBy(snippetsTable.authorName)
+        .orderBy(desc(count()), snippetsTable.authorName)
+        .limit(limit);
+      return rows.map((r) => ({
+        authorName: r.authorName,
+        snippetCount: Number(r.count),
+        totalViews: Number(r.totalViews ?? 0),
+        totalCopies: Number(r.totalCopies ?? 0),
+      }));
+    });
+    setStatsCacheHeaders(res);
+    res.json(data);
   } catch (err) {
     logger.error({ err }, "[stats] GET /api/stats/top-authors failed");
     res.status(500).json({ error: "DB_ERROR", message: "Gagal mengambil data author" });
@@ -115,17 +169,21 @@ router.get("/stats/tags", async (req, res) => {
   try {
     const requestedLimit = Number(req.query.limit) || 20;
     const limit = Math.min(Math.max(requestedLimit, 1), 1000);
-    const result = await db.execute(sql`
-      SELECT tag, COUNT(*)::int AS count
-      FROM snippets AS s
-      CROSS JOIN LATERAL unnest(s.tags) AS tag
-      WHERE s.status = 'approved'
-      GROUP BY tag
-      ORDER BY count DESC, tag ASC
-      LIMIT ${limit}
-    `);
-    const rows = ((result as any).rows ?? result) as Array<{ tag: string; count: number | string }>;
-    res.json(rows.map((row) => ({ tag: row.tag, count: Number(row.count) })));
+    const data = await getCachedStats(`tags:${limit}`, async () => {
+      const result = await db.execute(sql`
+        SELECT tag, COUNT(*)::int AS count
+        FROM snippets AS s
+        CROSS JOIN LATERAL unnest(s.tags) AS tag
+        WHERE s.status = 'approved'
+        GROUP BY tag
+        ORDER BY count DESC, tag ASC
+        LIMIT ${limit}
+      `);
+      const rows = ((result as any).rows ?? result) as Array<{ tag: string; count: number | string }>;
+      return rows.map((row) => ({ tag: row.tag, count: Number(row.count) }));
+    });
+    setStatsCacheHeaders(res);
+    res.json(data);
   } catch (err) {
     logger.error({ err }, "[stats] GET /api/stats/tags failed");
     res.status(500).json({ error: "DB_ERROR", message: "Gagal mengambil data tag" });
@@ -136,14 +194,26 @@ router.get("/stats/tags", async (req, res) => {
 router.get("/stats/top-viewed", async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 10, 50);
-    const rows = await db
-      .select()
-      .from(snippetsTable)
-      .where(eq(snippetsTable.status, "approved"))
-      .orderBy(desc(snippetsTable.viewCount))
-      .limit(limit);
-
-    res.json(rows.map(formatSnippet));
+    const data = await getCachedStats(`top-viewed:${limit}`, async () => {
+      const rows = await db
+        .select({
+          id: snippetsTable.id,
+          slug: snippetsTable.slug,
+          title: snippetsTable.title,
+          language: snippetsTable.language,
+          authorName: snippetsTable.authorName,
+          viewCount: snippetsTable.viewCount,
+          copyCount: snippetsTable.copyCount,
+          createdAt: snippetsTable.createdAt,
+        })
+        .from(snippetsTable)
+        .where(eq(snippetsTable.status, "approved"))
+        .orderBy(desc(snippetsTable.viewCount), desc(snippetsTable.copyCount), asc(snippetsTable.title), asc(snippetsTable.id))
+        .limit(limit);
+      return rows.map(formatStatsSnippet);
+    });
+    setStatsCacheHeaders(res);
+    res.json(data);
   } catch (err) {
     logger.error({ err }, "[stats] GET /api/stats/top-viewed failed");
     res.status(500).json({ error: "DB_ERROR", message: "Gagal mengambil data views" });
@@ -154,14 +224,26 @@ router.get("/stats/top-viewed", async (req, res) => {
 router.get("/stats/top-copied", async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 10, 50);
-    const rows = await db
-      .select()
-      .from(snippetsTable)
-      .where(eq(snippetsTable.status, "approved"))
-      .orderBy(desc(snippetsTable.copyCount))
-      .limit(limit);
-
-    res.json(rows.map(formatSnippet));
+    const data = await getCachedStats(`top-copied:${limit}`, async () => {
+      const rows = await db
+        .select({
+          id: snippetsTable.id,
+          slug: snippetsTable.slug,
+          title: snippetsTable.title,
+          language: snippetsTable.language,
+          authorName: snippetsTable.authorName,
+          viewCount: snippetsTable.viewCount,
+          copyCount: snippetsTable.copyCount,
+          createdAt: snippetsTable.createdAt,
+        })
+        .from(snippetsTable)
+        .where(eq(snippetsTable.status, "approved"))
+        .orderBy(desc(snippetsTable.copyCount), desc(snippetsTable.viewCount), asc(snippetsTable.title), asc(snippetsTable.id))
+        .limit(limit);
+      return rows.map(formatStatsSnippet);
+    });
+    setStatsCacheHeaders(res);
+    res.json(data);
   } catch (err) {
     logger.error({ err }, "[stats] GET /api/stats/top-copied failed");
     res.status(500).json({ error: "DB_ERROR", message: "Gagal mengambil data salinan" });
@@ -171,17 +253,21 @@ router.get("/stats/top-copied", async (req, res) => {
 // GET /api/stats/timeline — monthly submission counts for last 12 months
 router.get("/stats/timeline", async (_req, res) => {
   try {
-    const result = await db.execute(sql`
-      SELECT
-        TO_CHAR(created_at, 'YYYY-MM') AS month,
-        COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE status = 'approved')::int AS approved
-      FROM snippets
-      WHERE created_at >= NOW() - INTERVAL '12 months'
-      GROUP BY month
-      ORDER BY month ASC
-    `) as any;
-    res.json(result?.rows ?? result ?? []);
+    const data = await getCachedStats("timeline", async () => {
+      const result = await db.execute(sql`
+        SELECT
+          TO_CHAR(created_at, 'YYYY-MM') AS month,
+          COUNT(*)::int AS total,
+          COUNT(*) FILTER (WHERE status = 'approved')::int AS approved
+        FROM snippets
+        WHERE created_at >= NOW() - INTERVAL '12 months'
+        GROUP BY month
+        ORDER BY month ASC
+      `) as any;
+      return result?.rows ?? result ?? [];
+    });
+    setStatsCacheHeaders(res);
+    res.json(data);
   } catch (err) {
     logger.error({ err }, "[stats] GET /api/stats/timeline failed");
     res.status(500).json({ error: "DB_ERROR", message: "Gagal mengambil data timeline" });
@@ -191,35 +277,39 @@ router.get("/stats/timeline", async (_req, res) => {
 // GET /api/stats/engagement — avg views, copies, engagement metrics
 router.get("/stats/engagement", async (_req, res) => {
   try {
-    const result = await db.execute(sql`
-      SELECT
-        COUNT(*)::int AS total,
-        COALESCE(AVG(view_count), 0)::float AS avg_views,
-        COALESCE(AVG(copy_count), 0)::float AS avg_copies,
-        COALESCE(SUM(view_count), 0)::int AS total_views,
-        COALESCE(SUM(copy_count), 0)::int AS total_copies,
-        COALESCE(
-          CASE WHEN SUM(view_count) > 0
-            THEN (SUM(copy_count)::float / SUM(view_count)::float) * 100
-            ELSE 0 END,
-          0
-        )::float AS engagement_rate,
-        MAX(view_count)::int AS max_views,
-        MAX(copy_count)::int AS max_copies
-      FROM snippets
-      WHERE status = 'approved'
-    `) as any;
-    const data = result?.rows?.[0] ?? result?.[0] ?? {};
-    res.json({
-      totalSnippets: Number(data?.total ?? 0),
-      avgViews: Math.round(Number(data?.avg_views ?? 0) * 10) / 10,
-      avgCopies: Math.round(Number(data?.avg_copies ?? 0) * 10) / 10,
-      totalViews: Number(data?.total_views ?? 0),
-      totalCopies: Number(data?.total_copies ?? 0),
-      engagementRate: Math.round(Number(data?.engagement_rate ?? 0) * 10) / 10,
-      maxViews: Number(data?.max_views ?? 0),
-      maxCopies: Number(data?.max_copies ?? 0),
+    const data = await getCachedStats("engagement", async () => {
+      const result = await db.execute(sql`
+        SELECT
+          COUNT(*)::int AS total,
+          COALESCE(AVG(view_count), 0)::float AS avg_views,
+          COALESCE(AVG(copy_count), 0)::float AS avg_copies,
+          COALESCE(SUM(view_count), 0)::int AS total_views,
+          COALESCE(SUM(copy_count), 0)::int AS total_copies,
+          COALESCE(
+            CASE WHEN SUM(view_count) > 0
+              THEN (SUM(copy_count)::float / SUM(view_count)::float) * 100
+              ELSE 0 END,
+            0
+          )::float AS engagement_rate,
+          MAX(view_count)::int AS max_views,
+          MAX(copy_count)::int AS max_copies
+        FROM snippets
+        WHERE status = 'approved'
+      `) as any;
+      const summary = result?.rows?.[0] ?? result?.[0] ?? {};
+      return {
+        totalSnippets: Number(summary?.total ?? 0),
+        avgViews: Math.round(Number(summary?.avg_views ?? 0) * 10) / 10,
+        avgCopies: Math.round(Number(summary?.avg_copies ?? 0) * 10) / 10,
+        totalViews: Number(summary?.total_views ?? 0),
+        totalCopies: Number(summary?.total_copies ?? 0),
+        engagementRate: Math.round(Number(summary?.engagement_rate ?? 0) * 10) / 10,
+        maxViews: Number(summary?.max_views ?? 0),
+        maxCopies: Number(summary?.max_copies ?? 0),
+      };
     });
+    setStatsCacheHeaders(res);
+    res.json(data);
   } catch (err) {
     logger.error({ err }, "[stats] GET /api/stats/engagement failed");
     res.status(500).json({ error: "DB_ERROR", message: "Gagal mengambil data engagement" });
@@ -230,13 +320,26 @@ router.get("/stats/engagement", async (_req, res) => {
 router.get("/stats/trending", async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 5, 20);
-    const rows = await db
-      .select()
-      .from(snippetsTable)
-      .where(eq(snippetsTable.status, "approved"))
-      .orderBy(desc(sql`(${snippetsTable.viewCount} + ${snippetsTable.copyCount} * 3)`))
-      .limit(limit);
-    res.json(rows.map(formatSnippet));
+    const data = await getCachedStats(`trending:${limit}`, async () => {
+      const rows = await db
+        .select({
+          id: snippetsTable.id,
+          slug: snippetsTable.slug,
+          title: snippetsTable.title,
+          language: snippetsTable.language,
+          authorName: snippetsTable.authorName,
+          viewCount: snippetsTable.viewCount,
+          copyCount: snippetsTable.copyCount,
+          createdAt: snippetsTable.createdAt,
+        })
+        .from(snippetsTable)
+        .where(eq(snippetsTable.status, "approved"))
+        .orderBy(desc(sql`(${snippetsTable.viewCount} + ${snippetsTable.copyCount} * 3)`), desc(snippetsTable.viewCount), asc(snippetsTable.title), asc(snippetsTable.id))
+        .limit(limit);
+      return rows.map(formatStatsSnippet);
+    });
+    setStatsCacheHeaders(res);
+    res.json(data);
   } catch (err) {
     logger.error({ err }, "[stats] GET /api/stats/trending failed");
     res.status(500).json({ error: "DB_ERROR" });
