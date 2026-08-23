@@ -25,6 +25,38 @@ const MIN_TOTAL_FOR_PAGINATION = 5;
 const TOP_TAGS_LIMIT = 8;
 
 type SortBy = "popular" | "latest" | "az";
+type HomeState = { search: string; language: string; page: number; limit: number; sortBy: SortBy; activeTags: string[] };
+
+function readHomeState(): HomeState {
+  const fallback: HomeState = { search: "", language: "all", page: 1, limit: 10, sortBy: "az", activeTags: [] };
+  if (typeof window === "undefined") return fallback;
+
+  const params = new URLSearchParams(window.location.search);
+  const stateKeys = ["search", "language", "tag", "tags", "sortBy", "page", "limit"];
+  const hasUrlState = stateKeys.some((key) => params.has(key));
+  let saved: Partial<HomeState> = {};
+  if (!hasUrlState) {
+    try {
+      saved = JSON.parse(sessionStorage.getItem("kaai-home-state") || "{}") as Partial<HomeState>;
+    } catch {}
+  }
+
+  const source = hasUrlState ? params : null;
+  const rawLimit = Number(source?.get("limit") ?? saved.limit);
+  const rawPage = Number(source?.get("page") ?? saved.page);
+  const rawSort = source?.get("sortBy") ?? saved.sortBy;
+  const tagsValue = source?.get("tags") ?? source?.get("tag") ?? saved.activeTags?.join(",") ?? "";
+  const sortBy: SortBy = rawSort === "popular" || rawSort === "latest" || rawSort === "az" ? rawSort : fallback.sortBy;
+
+  return {
+    search: source?.get("search") ?? saved.search ?? fallback.search,
+    language: source?.get("language") ?? saved.language ?? fallback.language,
+    page: Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : fallback.page,
+    limit: LIMIT_OPTIONS.includes(rawLimit) ? rawLimit : fallback.limit,
+    sortBy,
+    activeTags: tagsValue.split(",").map((tag) => tag.trim()).filter(Boolean),
+  };
+}
 
 const SORT_OPTIONS: { value: SortBy; label: string; icon: React.ElementType }[] = [
   { value: "az", label: "A–Z", icon: AlignLeft },
@@ -277,14 +309,14 @@ export default function Home() {
     ],
   });
 
-  const [search, setSearch] = useState("");
-  const [language, setLanguage] = useState<string>("all");
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(10);
-  const [sortBy, setSortBy] = useState<SortBy>("az");
+  const [search, setSearch] = useState(() => readHomeState().search);
+  const [language, setLanguage] = useState<string>(() => readHomeState().language);
+  const [page, setPage] = useState(() => readHomeState().page);
+  const [limit, setLimit] = useState(() => readHomeState().limit);
+  const [sortBy, setSortBy] = useState<SortBy>(() => readHomeState().sortBy);
   const [sortOpen, setSortOpen] = useState(false);
   const [langCatalogOpen, setLangCatalogOpen] = useState(false);
-  const [activeTags, setActiveTags] = useState<string[]>([]);
+  const [activeTags, setActiveTags] = useState<string[]>(() => readHomeState().activeTags);
   const [windowStart, setWindowStart] = useState(1);
   const [showTagsModal, setShowTagsModal] = useState(false);
 
@@ -321,9 +353,19 @@ export default function Home() {
   }, [page, windowStart]);
 
   useEffect(() => {
-    setPage(1);
-    setWindowStart(1);
-  }, [debouncedSearch, language, JSON.stringify(activeTags), sortBy, limit]);
+    const state = { search, language, page, limit, sortBy, activeTags };
+    try { sessionStorage.setItem("kaai-home-state", JSON.stringify(state)); } catch {}
+
+    const params = new URLSearchParams();
+    if (search.trim()) params.set("search", search.trim());
+    if (language !== "all") params.set("language", language);
+    if (activeTags.length > 0) params.set("tags", activeTags.join(","));
+    if (sortBy !== "az") params.set("sortBy", sortBy);
+    if (page > 1) params.set("page", String(page));
+    if (limit !== 10) params.set("limit", String(limit));
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  }, [search, language, page, limit, sortBy, activeTags]);
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -347,9 +389,9 @@ export default function Home() {
   };
 
   const toggleTag = (tag: string) => {
-    setActiveTags((prev) =>
-      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
-    );
+    setActiveTags((prev) => prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]);
+    setPage(1);
+    setWindowStart(1);
   };
 
   const navigateTo = (p: number) => {
@@ -463,7 +505,7 @@ export default function Home() {
               placeholder="Cari judul, author, bahasa, tag... (ID/EN)"
               className="pl-10 h-9 bg-background/50 border-border/60 text-sm focus-visible:ring-blue-500/30 focus-visible:border-blue-500/40"
               value={search}
-              onChange={(e) => { setSearch(e.target.value); }}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); setWindowStart(1); }}
               data-testid="input-search-snippets"
             />
             {search && (
@@ -504,7 +546,7 @@ export default function Home() {
                     {SORT_OPTIONS.map((opt) => (
                       <button
                         key={opt.value}
-                        onClick={() => { setSortBy(opt.value); setSortOpen(false); }}
+                        onClick={() => { setSortBy(opt.value); setPage(1); setWindowStart(1); setSortOpen(false); }}
                         className={cn(
                           "w-full px-3 py-2 text-left text-xs flex items-center gap-2 hover:bg-white/5 transition-colors",
                           sortBy === opt.value && "text-blue-400 bg-blue-500/5",
@@ -540,7 +582,7 @@ export default function Home() {
                 {langCatalogOpen && (
                   <LanguageCatalog
                     selected={language}
-                    onSelect={(val) => { setLanguage(val); }}
+                    onSelect={(val) => { setLanguage(val); setPage(1); setWindowStart(1); }}
                     onClose={() => setLangCatalogOpen(false)}
                   />
                 )}

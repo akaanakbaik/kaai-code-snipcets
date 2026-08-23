@@ -111,7 +111,7 @@ export async function createApiKey(req: Request, res: Response): Promise<void> {
 }
 
 export async function updateApiKey(req: Request, res: Response): Promise<void> {
-  const { id } = req.params;
+  const id = String(req.params.id);
   const { name, isActive, rateLimitPerSecond, rateLimitPerDay, rateLimitPerMonth, newKey } = req.body;
 
   try {
@@ -151,7 +151,7 @@ export async function updateApiKey(req: Request, res: Response): Promise<void> {
 }
 
 export async function deleteApiKey(req: Request, res: Response): Promise<void> {
-  const { id } = req.params;
+  const id = String(req.params.id);
   try {
     await db.delete(apiKeyUsageTable).where(eq(apiKeyUsageTable.apiKeyId, id));
     await db.delete(apiKeysTable).where(eq(apiKeysTable.id, id));
@@ -188,7 +188,7 @@ export async function addIpWhitelist(req: Request, res: Response): Promise<void>
 }
 
 export async function updateIpWhitelist(req: Request, res: Response): Promise<void> {
-  const { id } = req.params;
+  const id = String(req.params.id);
   const { label, isActive } = req.body;
   try {
     const updates: Record<string, unknown> = {};
@@ -203,7 +203,7 @@ export async function updateIpWhitelist(req: Request, res: Response): Promise<vo
 }
 
 export async function deleteIpWhitelist(req: Request, res: Response): Promise<void> {
-  const { id } = req.params;
+  const id = String(req.params.id);
   try {
     await db.delete(adminIpWhitelistTable).where(eq(adminIpWhitelistTable.id, id));
     res.json({ success: true });

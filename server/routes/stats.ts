@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "../lib/db.js";
 import { snippetsTable } from "../lib/schema.js";
-import { eq, count, countDistinct, desc, sum, sql } from "drizzle-orm";
+import { eq, count, desc, sum, sql } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 
 const router = Router();
@@ -19,26 +19,26 @@ function formatSnippet(snippet: typeof snippetsTable.$inferSelect) {
 // GET /api/stats — main statistics
 router.get("/stats", async (_req, res) => {
   try {
-    const [total, pending, approved, rejected, authors, languages, viewsRow, copiesRow] = await Promise.all([
-      db.select({ count: count() }).from(snippetsTable),
-      db.select({ count: count() }).from(snippetsTable).where(eq(snippetsTable.status, "pending")),
-      db.select({ count: count() }).from(snippetsTable).where(eq(snippetsTable.status, "approved")),
-      db.select({ count: count() }).from(snippetsTable).where(eq(snippetsTable.status, "rejected")),
-      db.select({ count: countDistinct(snippetsTable.authorEmail) }).from(snippetsTable),
-      db.selectDistinct({ language: snippetsTable.language }).from(snippetsTable).where(eq(snippetsTable.status, "approved")),
-      db.select({ total: sum(snippetsTable.viewCount) }).from(snippetsTable).where(eq(snippetsTable.status, "approved")),
-      db.select({ total: sum(snippetsTable.copyCount) }).from(snippetsTable).where(eq(snippetsTable.status, "approved")),
-    ]);
+    const [summary] = await db.select({
+      totalSnippets: count(),
+      pendingSnippets: sql<number>`COUNT(*) FILTER (WHERE ${snippetsTable.status} = 'pending')`,
+      approvedSnippets: sql<number>`COUNT(*) FILTER (WHERE ${snippetsTable.status} = 'approved')`,
+      rejectedSnippets: sql<number>`COUNT(*) FILTER (WHERE ${snippetsTable.status} = 'rejected')`,
+      totalAuthors: sql<number>`COUNT(DISTINCT ${snippetsTable.authorEmail}) FILTER (WHERE ${snippetsTable.status} = 'approved')`,
+      totalLanguages: sql<number>`COUNT(DISTINCT ${snippetsTable.language}) FILTER (WHERE ${snippetsTable.status} = 'approved')`,
+      totalViews: sql<number>`COALESCE(SUM(${snippetsTable.viewCount}) FILTER (WHERE ${snippetsTable.status} = 'approved'), 0)`,
+      totalCopies: sql<number>`COALESCE(SUM(${snippetsTable.copyCount}) FILTER (WHERE ${snippetsTable.status} = 'approved'), 0)`,
+    }).from(snippetsTable);
 
     res.json({
-      totalSnippets: Number(total[0]?.count ?? 0),
-      pendingSnippets: Number(pending[0]?.count ?? 0),
-      approvedSnippets: Number(approved[0]?.count ?? 0),
-      rejectedSnippets: Number(rejected[0]?.count ?? 0),
-      totalAuthors: Number(authors[0]?.count ?? 0),
-      totalLanguages: languages.length,
-      totalViews: Number(viewsRow[0]?.total ?? 0),
-      totalCopies: Number(copiesRow[0]?.total ?? 0),
+      totalSnippets: Number(summary?.totalSnippets ?? 0),
+      pendingSnippets: Number(summary?.pendingSnippets ?? 0),
+      approvedSnippets: Number(summary?.approvedSnippets ?? 0),
+      rejectedSnippets: Number(summary?.rejectedSnippets ?? 0),
+      totalAuthors: Number(summary?.totalAuthors ?? 0),
+      totalLanguages: Number(summary?.totalLanguages ?? 0),
+      totalViews: Number(summary?.totalViews ?? 0),
+      totalCopies: Number(summary?.totalCopies ?? 0),
     });
   } catch (err) {
     logger.error({ err }, "[stats] GET /api/stats failed");
@@ -113,25 +113,19 @@ router.get("/stats/top-authors", async (req, res) => {
 // GET /api/stats/tags — top tags with counts
 router.get("/stats/tags", async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 20, 100);
-    const rows = await db
-      .select({ tags: snippetsTable.tags })
-      .from(snippetsTable)
-      .where(eq(snippetsTable.status, "approved"));
-
-    const tagCounts: Record<string, number> = {};
-    rows.forEach((r) => {
-      (r.tags ?? []).forEach((tag) => {
-        tagCounts[tag] = (tagCounts[tag] || 0) + 1;
-      });
-    });
-
-    const sorted = Object.entries(tagCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, limit)
-      .map(([tag, cnt]) => ({ tag, count: cnt }));
-
-    res.json(sorted);
+    const requestedLimit = Number(req.query.limit) || 20;
+    const limit = Math.min(Math.max(requestedLimit, 1), 1000);
+    const result = await db.execute(sql`
+      SELECT tag, COUNT(*)::int AS count
+      FROM snippets AS s
+      CROSS JOIN LATERAL unnest(s.tags) AS tag
+      WHERE s.status = 'approved'
+      GROUP BY tag
+      ORDER BY count DESC, tag ASC
+      LIMIT ${limit}
+    `);
+    const rows = ((result as any).rows ?? result) as Array<{ tag: string; count: number | string }>;
+    res.json(rows.map((row) => ({ tag: row.tag, count: Number(row.count) })));
   } catch (err) {
     logger.error({ err }, "[stats] GET /api/stats/tags failed");
     res.status(500).json({ error: "DB_ERROR", message: "Gagal mengambil data tag" });

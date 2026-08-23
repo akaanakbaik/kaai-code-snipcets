@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { runSync } from "../lib/sync.js";
+import { runFullSync } from "../lib/sync.js";
 
 const router = Router();
 
@@ -20,7 +20,7 @@ router.get("/cron/sync", async (req, res) => {
 
   const startedAt = Date.now();
   try {
-    await runSync();
+    await runFullSync();
     res.json({ ok: true, durationMs: Date.now() - startedAt });
   } catch (err) {
     res.status(500).json({ error: "Sync failed", message: (err as Error).message });

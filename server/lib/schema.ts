@@ -7,7 +7,6 @@ import {
   pgEnum,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod";
 
 // ─── Snippets ─────────────────────────────────────────────────────────────────
 
@@ -45,7 +44,7 @@ export const insertSnippetSchema = createInsertSchema(snippetsTable).omit({
   updatedAt: true,
 });
 
-export type InsertSnippet = z.infer<typeof insertSnippetSchema>;
+export type InsertSnippet = typeof insertSnippetSchema._output;
 export type Snippet = typeof snippetsTable.$inferSelect;
 
 // ─── Admin ────────────────────────────────────────────────────────────────────

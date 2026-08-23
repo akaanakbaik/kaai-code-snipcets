@@ -111,7 +111,7 @@ async function directSyncSupabase1(pool: Pool, snippets: SnippetRow[]): Promise<
       await client.query(
         `INSERT INTO snippets (id,title,description,language,tags,code,author_name,view_count,copy_count,created_at,updated_at)
          VALUES ${placeholders.join(",")}
-         ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title,view_count=EXCLUDED.view_count,copy_count=EXCLUDED.copy_count,updated_at=EXCLUDED.updated_at`,
+         ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title,description=EXCLUDED.description,language=EXCLUDED.language,tags=EXCLUDED.tags,code=EXCLUDED.code,author_name=EXCLUDED.author_name,view_count=EXCLUDED.view_count,copy_count=EXCLUDED.copy_count,updated_at=EXCLUDED.updated_at`,
         values,
       );
       synced += slice.length;
@@ -144,7 +144,7 @@ async function directSyncSupabase2(pool: Pool, snippets: SnippetRow[]): Promise<
       await client.query(
         `INSERT INTO snippets (id,title,description,language,tags,code,author_name,author_email,status,view_count,copy_count,created_at,updated_at)
          VALUES ${placeholders.join(",")}
-         ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title,status=EXCLUDED.status,view_count=EXCLUDED.view_count,copy_count=EXCLUDED.copy_count,updated_at=EXCLUDED.updated_at`,
+         ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title,description=EXCLUDED.description,language=EXCLUDED.language,tags=EXCLUDED.tags,code=EXCLUDED.code,author_name=EXCLUDED.author_name,author_email=EXCLUDED.author_email,status=EXCLUDED.status,view_count=EXCLUDED.view_count,copy_count=EXCLUDED.copy_count,updated_at=EXCLUDED.updated_at`,
         values,
       );
       synced += slice.length;
@@ -157,6 +157,56 @@ async function directSyncSupabase2(pool: Pool, snippets: SnippetRow[]): Promise<
   } finally {
     client.release();
   }
+}
+
+async function pullBackupIntoDatabase(): Promise<number> {
+  const token = BACKUP_GITHUB_TOKEN || GITHUB_TOKEN;
+  if (!token || !BACKUP_GITHUB_REPO) return 0;
+  try {
+    const res = await fetch(`https://api.github.com/repos/${BACKUP_GITHUB_REPO}/contents/backup/latest.json`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return 0;
+    const file = await res.json() as { content?: string; encoding?: string };
+    if (!file.content) return 0;
+    const payload = JSON.parse(Buffer.from(file.content.replace(/\n/g, ""), file.encoding === "base64" ? "base64" : "utf8").toString("utf8")) as { snippets?: SnippetRow[] };
+    const incoming = (Array.isArray(payload) ? payload : payload.snippets ?? []).filter((snippet) => snippet?.id && snippet?.title && snippet?.code);
+    if (incoming.length === 0) return 0;
+
+    const rows = incoming.map((snippet) => ({
+      id: snippet.id,
+      slug: snippet.slug ?? null,
+      title: snippet.title,
+      description: snippet.description ?? "",
+      language: snippet.language ?? "text",
+      tags: snippet.tags ?? [],
+      code: snippet.code,
+      authorName: snippet.authorName ?? "unknown",
+      authorEmail: snippet.authorEmail ?? "unknown@invalid.local",
+      status: "approved" as const,
+      rejectReason: null,
+      viewCount: Number(snippet.viewCount ?? 0),
+      copyCount: Number(snippet.copyCount ?? 0),
+      isLocked: false,
+      lockType: null,
+      lockHash: null,
+      lockSalt: null,
+      lockDisabledAt: null,
+      createdAt: snippet.createdAt ? new Date(snippet.createdAt) : new Date(),
+      updatedAt: snippet.updatedAt ? new Date(snippet.updatedAt) : new Date(),
+    }));
+    await db.insert(snippetsTable).values(rows).onConflictDoNothing({ target: snippetsTable.id });
+    return rows.length;
+  } catch (err) {
+    logger.warn(`[sync] Backup repo pull failed: ${(err as Error).message}`);
+    return 0;
+  }
+}
+
+export async function runFullSync(): Promise<void> {
+  await pullBackupIntoDatabase();
+  await Promise.all([runSync(), backupToGithub()]);
 }
 
 export async function runSync(): Promise<void> {
@@ -312,6 +362,14 @@ async function backupSnippetFile(token: string, repo: string, snippet: SnippetRo
   await pushToGithub(token, repo, path, b64, `[Backup] ${snippet.title}`);
 }
 
+export async function backupSnippetRecord(snippet: SnippetRow): Promise<void> {
+  const token = BACKUP_GITHUB_TOKEN || GITHUB_TOKEN;
+  if (!token) return;
+  const payload = Buffer.from(JSON.stringify({ exportedAt: new Date().toISOString(), snippet }, null, 2)).toString("base64");
+  await pushToGithub(token, BACKUP_GITHUB_REPO, `backup/incoming/${snippet.id}.json`, payload, `[Auto] Sync snippet ${snippet.id}`);
+  if (snippet.status === "approved") await backupSnippetFile(token, BACKUP_GITHUB_REPO, snippet);
+}
+
 /** Full backup: JSON dumps + per-snippet files */
 async function backupToGithub(): Promise<void> {
   const token = BACKUP_GITHUB_TOKEN || GITHUB_TOKEN;
@@ -393,6 +451,10 @@ async function ensureDbIndexes(): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_snippets_view_count ON snippets(view_count DESC);
       CREATE INDEX IF NOT EXISTS idx_snippets_created_at ON snippets(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_snippets_status_created ON snippets(status, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_snippets_status_view_count ON snippets(status, view_count DESC);
+      CREATE INDEX IF NOT EXISTS idx_snippets_status_copy_count ON snippets(status, copy_count DESC);
+      CREATE INDEX IF NOT EXISTS idx_snippets_status_author ON snippets(status, author_email);
+      CREATE INDEX IF NOT EXISTS idx_snippets_tags_gin ON snippets USING GIN(tags);
     ` as any);
     logger.info("[sync] DB indexes ensured");
   } catch (err) {

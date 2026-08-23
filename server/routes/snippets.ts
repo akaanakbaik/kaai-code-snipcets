@@ -1,12 +1,13 @@
 import { Router, type Request, type Response } from "express";
 import { db } from "../lib/db.js";
 import { snippetsTable, snippetLockAttemptsTable, snippetDisableLockOtpsTable } from "../lib/schema.js";
-import { eq, and, or, ilike, sql, desc, count, asc } from "drizzle-orm";
+import { eq, and, or, ilike, desc, asc, count, sql } from "drizzle-orm";
 import crypto from "node:crypto";
 import { z } from "zod";
 import { sendBroadcastEmail, sendDisableLockOtpEmail } from "../lib/mailer.js";
 import { logger } from "../lib/logger.js";
-import { generateUniqueSlug, titleToSlug } from "../lib/slug.js";
+import { backupSnippetRecord } from "../lib/sync.js";
+import { generateSlug, generateUniqueSlug, titleToSlug } from "../lib/slug.js";
 
 const router = Router();
 
@@ -331,14 +332,13 @@ router.get("/snippets/check-title", async (req, res) => {
 // POST /api/snippets/:id/view
 router.post("/snippets/:id/view", async (req, res) => {
   try {
-    const [snippet] = await db
-      .select({ id: snippetsTable.id, viewCount: snippetsTable.viewCount })
-      .from(snippetsTable)
-      .where(and(eq(snippetsTable.id, req.params.id), eq(snippetsTable.status, "approved")))
-      .limit(1);
-    if (!snippet) { res.status(404).json({ error: "NOT_FOUND" }); return; }
-    await db.update(snippetsTable).set({ viewCount: (snippet.viewCount ?? 0) + 1 }).where(eq(snippetsTable.id, snippet.id));
-    res.json({ viewCount: (snippet.viewCount ?? 0) + 1 });
+    const [updated] = await db
+      .update(snippetsTable)
+      .set({ viewCount: sql`${snippetsTable.viewCount} + 1` })
+      .where(and(eq(snippetsTable.id, String(req.params.id)), eq(snippetsTable.status, "approved")))
+      .returning({ id: snippetsTable.id, viewCount: snippetsTable.viewCount });
+    if (!updated) { res.status(404).json({ error: "NOT_FOUND" }); return; }
+    res.json({ viewCount: updated.viewCount });
   } catch {
     res.status(500).json({ error: "SERVER_ERROR" });
   }
@@ -347,14 +347,13 @@ router.post("/snippets/:id/view", async (req, res) => {
 // POST /api/snippets/:id/copy
 router.post("/snippets/:id/copy", async (req, res) => {
   try {
-    const [snippet] = await db
-      .select({ id: snippetsTable.id, copyCount: snippetsTable.copyCount })
-      .from(snippetsTable)
-      .where(and(eq(snippetsTable.id, req.params.id), eq(snippetsTable.status, "approved")))
-      .limit(1);
-    if (!snippet) { res.status(404).json({ error: "NOT_FOUND" }); return; }
-    await db.update(snippetsTable).set({ copyCount: (snippet.copyCount ?? 0) + 1 }).where(eq(snippetsTable.id, snippet.id));
-    res.json({ copyCount: (snippet.copyCount ?? 0) + 1 });
+    const [updated] = await db
+      .update(snippetsTable)
+      .set({ copyCount: sql`${snippetsTable.copyCount} + 1` })
+      .where(and(eq(snippetsTable.id, String(req.params.id)), eq(snippetsTable.status, "approved")))
+      .returning({ id: snippetsTable.id, copyCount: snippetsTable.copyCount });
+    if (!updated) { res.status(404).json({ error: "NOT_FOUND" }); return; }
+    res.json({ copyCount: updated.copyCount });
   } catch {
     res.status(500).json({ error: "SERVER_ERROR" });
   }
@@ -488,6 +487,7 @@ router.post("/snippets", async (req, res) => {
     const full = { ...snippet, authorEmail: snippet.authorEmail };
     sendToBot(full as any).catch(() => {});
     notifyAdmins(snippet.title, snippet.id, snippet.authorName).catch(() => {});
+    backupSnippetRecord(snippet as any).catch((err) => logger.warn(`[snippets] backup sync failed: ${(err as Error).message}`));
 
     res.status(201).json(formatSnippet(snippet));
   } catch (err) {
@@ -499,7 +499,7 @@ router.post("/snippets", async (req, res) => {
 // GET /api/snippets/:id — supports both ID and slug lookup
 router.get("/snippets/:id", async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(String(req.params.id));
     const unlockToken = req.headers["x-unlock-token"] as string | undefined;
 
     // Try by ID first, then by slug
@@ -543,7 +543,7 @@ router.get("/snippets/:id", async (req: Request, res: Response) => {
 
 // POST /api/snippets/:id/unlock — validate password and return unlock token
 router.post("/snippets/:id/unlock", async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = String(String(req.params.id));
   const ip = getClientIp(req);
   const { password } = req.body ?? {};
 
@@ -651,7 +651,7 @@ router.post("/snippets/:id/unlock", async (req: Request, res: Response) => {
 
 // POST /api/snippets/:id/disable-lock/request — request OTP to disable lock
 router.post("/snippets/:id/disable-lock/request", async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = String(String(req.params.id));
   const { authorEmail } = req.body ?? {};
 
   if (!authorEmail) {
@@ -710,7 +710,7 @@ router.post("/snippets/:id/disable-lock/request", async (req: Request, res: Resp
 
 // POST /api/snippets/:id/disable-lock/verify — verify OTP and disable lock
 router.post("/snippets/:id/disable-lock/verify", async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = String(String(req.params.id));
   const { otp } = req.body ?? {};
 
   if (!otp) {
@@ -782,7 +782,7 @@ router.post("/snippets/:id/approve", async (req, res) => {
   const [snippet] = await db
     .select()
     .from(snippetsTable)
-    .where(eq(snippetsTable.id, req.params.id))
+    .where(eq(snippetsTable.id, String(req.params.id)))
     .limit(1);
 
   if (!snippet) { res.status(404).json({ error: "NOT_FOUND" }); return; }
@@ -793,7 +793,7 @@ router.post("/snippets/:id/approve", async (req, res) => {
   const [updated] = await db
     .update(snippetsTable)
     .set({ status: "approved", slug, updatedAt: new Date() })
-    .where(eq(snippetsTable.id, req.params.id))
+    .where(eq(snippetsTable.id, String(req.params.id)))
     .returning();
 
   res.json(formatSnippet(updated));
@@ -810,7 +810,7 @@ router.post("/snippets/:id/reject", async (req, res) => {
   const [updated] = await db
     .update(snippetsTable)
     .set({ status: "rejected", rejectReason: reason ?? null, updatedAt: new Date() })
-    .where(eq(snippetsTable.id, req.params.id))
+    .where(eq(snippetsTable.id, String(req.params.id)))
     .returning();
   if (!updated) { res.status(404).json({ error: "NOT_FOUND" }); return; }
   res.json(formatSnippet(updated));

@@ -5,12 +5,13 @@ import {
   ipBansTable, emailBansTable, loginAttemptsTable,
   broadcastLogsTable, snippetsTable,
 } from "../lib/schema.js";
-import { eq, and, gt, desc, sum, count } from "drizzle-orm";
+import { eq, and, or, ilike, gt, desc, sum, count, inArray, sql } from "drizzle-orm";
 import crypto from "node:crypto";
 import {
   sendOtpEmail, sendApprovalEmail, sendRejectionEmail, sendBroadcastEmail, sendTestEmail,
 } from "../lib/mailer.js";
 import { logger } from "../lib/logger.js";
+import { backupSnippetRecord } from "../lib/sync.js";
 import { adminLoginRateLimit, getClientIp } from "../middleware/security.js";
 import {
   listApiKeys, createApiKey, updateApiKey, deleteApiKey,
@@ -24,9 +25,7 @@ const router = Router();
 
 const ALLOWED_ADMIN_EMAILS = [
   "akaanakbaik17@proton.me",
-  "yaudahpakeaja6@gmail.com",
-  "kelvdra46@gmail.com",
-  "clpmadang@gmail.com",
+  "khaliqarrasyidabdul@gmail.com",
 ];
 
 const SESSION_DURATION_MS            = 24 * 60 * 60 * 1000;    // 24h
@@ -38,19 +37,28 @@ const MAX_FAILED_ATTEMPTS_BEFORE_BAN = 5;
 // ─── Cookie helpers ───────────────────────────────────────────────────────────
 
 const SESSION_COOKIE = "admin_session";
+const SESSION_REFRESH_THRESHOLD_MS = 6 * 60 * 60 * 1000;
 
 function getSessionCookie(req: Request): string | undefined {
-  // Use plain cookie (HttpOnly + HTTPS = secure enough)
   return (req.cookies?.[SESSION_COOKIE] as string | undefined) || undefined;
 }
 
 function setSessionCookie(res: Response, sessionId: string, expiresAt: Date): void {
-  // Simple HttpOnly cookie — HTTPS provides transport security, no need for signed cookies
   res.cookie(SESSION_COOKIE, sessionId, {
     httpOnly: true,
-    secure: true,          // Always secure (site is HTTPS only)
-    sameSite: "lax",       // lax to allow navigation from email links
+    secure: true,
+    sameSite: "lax",
     expires: expiresAt,
+    maxAge: Math.max(0, expiresAt.getTime() - Date.now()),
+    path: "/",
+  });
+}
+
+function clearSessionCookie(res: Response): void {
+  res.clearCookie(SESSION_COOKIE, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
     path: "/",
   });
 }
@@ -74,12 +82,20 @@ async function getSession(req: Request) {
     const [session] = await db
       .select()
       .from(adminSessionsTable)
-      .where(and(eq(adminSessionsTable.id, token), gt(adminSessionsTable.expiresAt, new Date())))
+      .where(and(eq(adminSessionsTable.id, token), gt(adminSessionsTable.expiresAt, new Date()), inArray(adminSessionsTable.email, ALLOWED_ADMIN_EMAILS)))
       .limit(1);
     return session ?? null;
   } catch {
     return null;
   }
+}
+
+async function refreshSessionIfNeeded(session: NonNullable<Awaited<ReturnType<typeof getSession>>>, res: Response): Promise<void> {
+  if (session.expiresAt.getTime() - Date.now() >= SESSION_REFRESH_THRESHOLD_MS) return;
+  const expiresAt = new Date(Date.now() + SESSION_DURATION_MS);
+  await db.update(adminSessionsTable).set({ expiresAt }).where(eq(adminSessionsTable.id, session.id));
+  session.expiresAt = expiresAt;
+  setSessionCookie(res, session.id, expiresAt);
 }
 
 async function requireAdminSession(
@@ -89,10 +105,11 @@ async function requireAdminSession(
 ): Promise<void> {
   const session = await getSession(req);
   if (!session) {
-    res.clearCookie(SESSION_COOKIE, { path: "/" });
+    clearSessionCookie(res);
     res.status(401).json({ error: "UNAUTHORIZED", message: "Not authenticated" });
     return;
   }
+  await refreshSessionIfNeeded(session, res).catch(() => {});
   (req as any).adminEmail = session.email;
   try {
     await next(req, res);
@@ -163,9 +180,7 @@ async function resetFailedAttempts(ip: string, email: string): Promise<void> {
 
 const ADMIN_NAMES: Record<string, string> = {
   "akaanakbaik17@proton.me": "aka",
-  "yaudahpakeaja6@gmail.com": "youso",
-  "kelvdra46@gmail.com": "hydra",
-  "clpmadang@gmail.com": "udin",
+  "khaliqarrasyidabdul@gmail.com": "khaliq",
 };
 
 export async function seedAdminUsers(): Promise<void> {
@@ -194,9 +209,11 @@ export async function seedAdminUsers(): Promise<void> {
 router.get("/admin/session", async (req: Request, res: Response) => {
   const session = await getSession(req);
   if (!session) {
+    clearSessionCookie(res);
     res.status(401).json({ authenticated: false });
     return;
   }
+  await refreshSessionIfNeeded(session, res).catch(() => {});
   res.json({ authenticated: true, email: session.email, expiresAt: session.expiresAt.toISOString() });
 });
 
@@ -355,7 +372,7 @@ router.post("/admin/auth/verify-otp", adminLoginRateLimit, handleVerifyOtp);
 async function handleLogout(req: Request, res: Response): Promise<void> {
   const token = getSessionCookie(req);
   if (token) await db.delete(adminSessionsTable).where(eq(adminSessionsTable.id, token)).catch(() => {});
-  res.clearCookie(SESSION_COOKIE, { path: "/" });
+  clearSessionCookie(res);
   res.json({ success: true });
 }
 router.post("/admin/logout", handleLogout);
@@ -405,18 +422,41 @@ router.get("/admin/all-snippets", async (req: Request, res: Response) => {
   await requireAdminSession(req, res, async (req, res) => {
     const adminEmail = (req as any).adminEmail as string ?? "";
     const status = req.query.status as string | undefined;
+    const search = String(req.query.search ?? "").trim();
     const limit = Math.min(Number(req.query.limit) || 50, 200);
     const page = Math.max(Number(req.query.page) || 1, 1);
     const offset = (page - 1) * limit;
     try {
-      const where = status ? eq(snippetsTable.status, status as any) : undefined;
-      const [snippets, [{ total }]] = await Promise.all([
+      const filters = [] as any[];
+      if (status && ["pending", "approved", "rejected"].includes(status)) filters.push(eq(snippetsTable.status, status as any));
+      if (search) {
+        const pattern = `%${search}%`;
+        filters.push(or(ilike(snippetsTable.title, pattern), ilike(snippetsTable.authorEmail, pattern), ilike(snippetsTable.language, pattern), ilike(snippetsTable.id, pattern)));
+      }
+      const where = filters.length > 0 ? and(...filters) : undefined;
+      const [snippets, [{ total }], [summary]] = await Promise.all([
         db.select().from(snippetsTable).where(where).orderBy(desc(snippetsTable.createdAt)).limit(limit).offset(offset),
         db.select({ total: count() }).from(snippetsTable).where(where),
+        db.select({
+          total: count(),
+          approved: sql<number>`count(*) FILTER (WHERE ${snippetsTable.status} = 'approved')`,
+          pending: sql<number>`count(*) FILTER (WHERE ${snippetsTable.status} = 'pending')`,
+          rejected: sql<number>`count(*) FILTER (WHERE ${snippetsTable.status} = 'rejected')`,
+          totalViews: sql<number>`coalesce(sum(${snippetsTable.viewCount}), 0)`,
+          totalCopies: sql<number>`coalesce(sum(${snippetsTable.copyCount}), 0)`,
+        }).from(snippetsTable),
       ]);
       res.json({
         data: snippets.map(s => formatSnippetForAdmin(s, adminEmail)),
         pagination: { page, limit, total: Number(total ?? 0), totalPages: Math.ceil(Number(total ?? 0) / limit) },
+        stats: {
+          total: Number(summary?.total ?? 0),
+          approved: Number(summary?.approved ?? 0),
+          pending: Number(summary?.pending ?? 0),
+          rejected: Number(summary?.rejected ?? 0),
+          totalViews: Number(summary?.totalViews ?? 0),
+          totalCopies: Number(summary?.totalCopies ?? 0),
+        },
       });
     } catch {
       res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch snippets" });
@@ -452,15 +492,16 @@ router.get("/admin/snippets", async (req: Request, res: Response) => {
 router.post("/admin/snippets/:id/approve", async (req: Request, res: Response) => {
   await requireAdminSession(req, res, async (req, res) => {
     try {
-      const [snippet] = await db.select().from(snippetsTable).where(eq(snippetsTable.id, req.params.id)).limit(1);
+      const [snippet] = await db.select().from(snippetsTable).where(eq(snippetsTable.id, String(req.params.id))).limit(1);
       if (!snippet) { res.status(404).json({ error: "NOT_FOUND" }); return; }
-      const [updated] = await db.update(snippetsTable).set({ status: "approved", rejectReason: null, updatedAt: new Date() }).where(eq(snippetsTable.id, req.params.id)).returning();
+      const [updated] = await db.update(snippetsTable).set({ status: "approved", rejectReason: null, updatedAt: new Date() }).where(eq(snippetsTable.id, String(req.params.id))).returning();
       // Get total approved count for email
       db.select({ count: count() }).from(snippetsTable).where(eq(snippetsTable.status, "approved")).then(([row]) => {
         sendApprovalEmail(snippet.authorEmail, snippet.title, snippet.id, snippet.slug, Number(row?.count ?? 0)).catch(() => {});
       }).catch(() => {
         sendApprovalEmail(snippet.authorEmail, snippet.title, snippet.id, snippet.slug).catch(() => {});
       });
+      backupSnippetRecord(updated as any).catch((err) => logger.warn(`[admin] backup sync failed: ${(err as Error).message}`));
       res.json({ ...updated, tags: updated.tags ?? [], createdAt: updated.createdAt.toISOString(), updatedAt: updated.updatedAt.toISOString() });
     } catch {
       res.status(500).json({ error: "SERVER_ERROR", message: "Failed to approve snippet" });
@@ -473,10 +514,11 @@ router.post("/admin/snippets/:id/reject", async (req: Request, res: Response) =>
   await requireAdminSession(req, res, async (req, res) => {
     const { reason } = req.body;
     try {
-      const [snippet] = await db.select().from(snippetsTable).where(eq(snippetsTable.id, req.params.id)).limit(1);
+      const [snippet] = await db.select().from(snippetsTable).where(eq(snippetsTable.id, String(req.params.id))).limit(1);
       if (!snippet) { res.status(404).json({ error: "NOT_FOUND" }); return; }
-      const [updated] = await db.update(snippetsTable).set({ status: "rejected", rejectReason: reason ?? null, updatedAt: new Date() }).where(eq(snippetsTable.id, req.params.id)).returning();
+      const [updated] = await db.update(snippetsTable).set({ status: "rejected", rejectReason: reason ?? null, updatedAt: new Date() }).where(eq(snippetsTable.id, String(req.params.id))).returning();
       sendRejectionEmail(snippet.authorEmail, snippet.title, reason).catch(() => {});
+      backupSnippetRecord(updated as any).catch((err) => logger.warn(`[admin] backup sync failed: ${(err as Error).message}`));
       res.json({ ...updated, tags: updated.tags ?? [], createdAt: updated.createdAt.toISOString(), updatedAt: updated.updatedAt.toISOString() });
     } catch {
       res.status(500).json({ error: "SERVER_ERROR", message: "Failed to reject snippet" });
@@ -493,9 +535,9 @@ router.patch("/admin/snippets/:id", async (req: Request, res: Response) => {
       return;
     }
     try {
-      const [snippet] = await db.select().from(snippetsTable).where(eq(snippetsTable.id, req.params.id)).limit(1);
+      const [snippet] = await db.select().from(snippetsTable).where(eq(snippetsTable.id, String(req.params.id))).limit(1);
       if (!snippet) { res.status(404).json({ error: "NOT_FOUND" }); return; }
-      const [updated] = await db.update(snippetsTable).set({ status, rejectReason: status === "rejected" ? (rejectReason ?? null) : null, updatedAt: new Date() }).where(eq(snippetsTable.id, req.params.id)).returning();
+      const [updated] = await db.update(snippetsTable).set({ status, rejectReason: status === "rejected" ? (rejectReason ?? null) : null, updatedAt: new Date() }).where(eq(snippetsTable.id, String(req.params.id))).returning();
       if (status === "approved") {
         db.select({ count: count() }).from(snippetsTable).where(eq(snippetsTable.status, "approved")).then(([row]) => {
           sendApprovalEmail(snippet.authorEmail, snippet.title, snippet.id, snippet.slug, Number(row?.count ?? 0)).catch(() => {});
@@ -504,6 +546,7 @@ router.patch("/admin/snippets/:id", async (req: Request, res: Response) => {
         });
       }
       else if (status === "rejected") sendRejectionEmail(snippet.authorEmail, snippet.title, rejectReason).catch(() => {});
+      backupSnippetRecord(updated as any).catch((err) => logger.warn(`[admin] backup sync failed: ${(err as Error).message}`));
       res.json({ ...updated, tags: updated.tags ?? [], createdAt: updated.createdAt.toISOString(), updatedAt: updated.updatedAt.toISOString() });
     } catch {
       res.status(500).json({ error: "SERVER_ERROR", message: "Failed to update snippet" });
@@ -520,12 +563,12 @@ router.put("/admin/snippets/:id", async (req: Request, res: Response) => {
       return;
     }
     try {
-      const [snippet] = await db.select().from(snippetsTable).where(eq(snippetsTable.id, req.params.id)).limit(1);
+      const [snippet] = await db.select().from(snippetsTable).where(eq(snippetsTable.id, String(req.params.id))).limit(1);
       if (!snippet) { res.status(404).json({ error: "NOT_FOUND" }); return; }
       const [updated] = await db
         .update(snippetsTable)
         .set({ title: String(title).trim(), description: description ? String(description).trim() : snippet.description, language: String(language).toLowerCase().trim(), tags: Array.isArray(tags) ? tags : snippet.tags, updatedAt: new Date() })
-        .where(eq(snippetsTable.id, req.params.id))
+        .where(eq(snippetsTable.id, String(req.params.id)))
         .returning();
       res.json({ ...updated, tags: updated.tags ?? [], createdAt: updated.createdAt.toISOString(), updatedAt: updated.updatedAt.toISOString() });
     } catch {
@@ -538,7 +581,7 @@ router.put("/admin/snippets/:id", async (req: Request, res: Response) => {
 router.delete("/admin/snippets/:id", async (req: Request, res: Response) => {
   await requireAdminSession(req, res, async (req, res) => {
     try {
-      await db.delete(snippetsTable).where(eq(snippetsTable.id, req.params.id));
+      await db.delete(snippetsTable).where(eq(snippetsTable.id, String(req.params.id)));
       res.json({ success: true });
     } catch {
       res.status(500).json({ error: "SERVER_ERROR", message: "Failed to delete snippet" });
@@ -587,14 +630,14 @@ router.get("/admin/security/bans", async (req: Request, res: Response) => {
 
 router.delete("/admin/security/bans/ip/:id", async (req: Request, res: Response) => {
   await requireAdminSession(req, res, async (req, res) => {
-    await db.delete(ipBansTable).where(eq(ipBansTable.id, req.params.id)).catch(() => {});
+    await db.delete(ipBansTable).where(eq(ipBansTable.id, String(req.params.id))).catch(() => {});
     res.json({ success: true });
   });
 });
 
 router.delete("/admin/security/bans/email/:id", async (req: Request, res: Response) => {
   await requireAdminSession(req, res, async (req, res) => {
-    await db.delete(emailBansTable).where(eq(emailBansTable.id, req.params.id)).catch(() => {});
+    await db.delete(emailBansTable).where(eq(emailBansTable.id, String(req.params.id))).catch(() => {});
     res.json({ success: true });
   });
 });
@@ -606,86 +649,72 @@ router.delete("/admin/security/bans/email/:id", async (req: Request, res: Respon
 router.get("/admin/analytics", async (req: Request, res: Response) => {
   await requireAdminSession(req, res, async (_req, res) => {
     try {
-      const [snippetCounts, recentSnippets, allSnippets] = await Promise.all([
+      const [snippetCounts, submissionsResult, authorsResult, languagesResult, engagementResult] = await Promise.all([
         db.select({ status: snippetsTable.status, total: count() }).from(snippetsTable).groupBy(snippetsTable.status),
-        db.select({ createdAt: snippetsTable.createdAt }).from(snippetsTable).orderBy(desc(snippetsTable.createdAt)).limit(200),
-        db.select({
-          authorEmail: snippetsTable.authorEmail,
-          authorName: snippetsTable.authorName,
-          language: snippetsTable.language,
-          viewCount: snippetsTable.viewCount,
-          copyCount: snippetsTable.copyCount,
-          status: snippetsTable.status,
-        }).from(snippetsTable),
+        db.execute(sql`
+          SELECT TO_CHAR(day, 'YYYY-MM-DD') AS date, COUNT(s.id)::int AS count
+          FROM generate_series(CURRENT_DATE - INTERVAL '13 days', CURRENT_DATE, INTERVAL '1 day') AS day
+          LEFT JOIN snippets AS s ON s.created_at::date = day::date
+          GROUP BY day
+          ORDER BY day ASC
+        `),
+        db.execute(sql`
+          WITH author_totals AS (
+            SELECT author_email AS email, MAX(author_name) AS name,
+              COUNT(*)::int AS snippet_count,
+              COALESCE(SUM(view_count), 0)::int AS views,
+              COALESCE(SUM(copy_count), 0)::int AS copies
+            FROM snippets
+            WHERE status = 'approved'
+            GROUP BY author_email
+          )
+          SELECT at.email, at.name, at.snippet_count, at.views, at.copies,
+            COALESCE(lang.language, 'other') AS top_language
+          FROM author_totals AS at
+          LEFT JOIN LATERAL (
+            SELECT language
+            FROM snippets AS s
+            WHERE s.status = 'approved' AND s.author_email = at.email
+            GROUP BY language
+            ORDER BY COUNT(*) DESC, language ASC
+            LIMIT 1
+          ) AS lang ON true
+          ORDER BY (at.views + at.copies * 2) DESC, at.email ASC
+          LIMIT 50
+        `),
+        db.execute(sql`
+          SELECT language, COUNT(*)::int AS count
+          FROM snippets
+          WHERE status = 'approved'
+          GROUP BY language
+          ORDER BY count DESC, language ASC
+          LIMIT 10
+        `),
+        db.execute(sql`
+          SELECT COUNT(*)::int AS total,
+            COALESCE(SUM(view_count), 0)::int AS total_views,
+            COALESCE(SUM(copy_count), 0)::int AS total_copies,
+            COUNT(DISTINCT author_email)::int AS total_authors
+          FROM snippets
+          WHERE status = 'approved'
+        `),
       ]);
 
       const totals: Record<string, number> = {};
       for (const row of snippetCounts) totals[row.status] = Number(row.total);
-
-      // Submissions per day (last 14 days)
-      const last14: Record<string, number> = {};
-      const now = new Date();
-      for (let i = 13; i >= 0; i--) {
-        const d = new Date(now);
-        d.setDate(d.getDate() - i);
-        last14[d.toISOString().slice(0, 10)] = 0;
-      }
-      for (const s of recentSnippets) {
-        const day = s.createdAt.toISOString().slice(0, 10);
-        if (day in last14) last14[day]++;
-      }
-      const submissionsPerDay = Object.entries(last14).map(([date, cnt]) => ({ date, count: cnt }));
-
-      // Top authors by (views + copies) weighted
-      const authorMap: Record<string, { name: string; views: number; copies: number; snippetCount: number; languages: Record<string, number> }> = {};
-      for (const s of allSnippets) {
-        if (!authorMap[s.authorEmail]) {
-          authorMap[s.authorEmail] = { name: s.authorName, views: 0, copies: 0, snippetCount: 0, languages: {} };
-        }
-        authorMap[s.authorEmail].views += s.viewCount ?? 0;
-        authorMap[s.authorEmail].copies += s.copyCount ?? 0;
-        authorMap[s.authorEmail].snippetCount += 1;
-        authorMap[s.authorEmail].languages[s.language] = (authorMap[s.authorEmail].languages[s.language] ?? 0) + 1;
-      }
-
-      const topByEngagement = Object.entries(authorMap)
-        .map(([email, a]) => ({
-          email,
-          name: a.name,
-          score: a.views * 1 + a.copies * 2,
-          views: a.views,
-          copies: a.copies,
-          snippetCount: a.snippetCount,
-          topLanguage: Object.entries(a.languages).sort((x, y) => y[1] - x[1])[0]?.[0] ?? "other",
-        }))
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 10);
-
-      const topBySnippets = Object.entries(authorMap)
-        .map(([email, a]) => ({
-          email,
-          name: a.name,
-          snippetCount: a.snippetCount,
-          topLanguage: Object.entries(a.languages).sort((x, y) => y[1] - x[1])[0]?.[0] ?? "other",
-          views: a.views,
-          copies: a.copies,
-        }))
-        .sort((a, b) => b.snippetCount - a.snippetCount)
-        .slice(0, 10);
-
-      // Top languages
-      const langCount: Record<string, number> = {};
-      for (const s of allSnippets) {
-        langCount[s.language] = (langCount[s.language] ?? 0) + 1;
-      }
-      const topLanguages = Object.entries(langCount)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 10)
-        .map(([language, cnt]) => ({ language, count: cnt }));
-
-      // Total views & copies
-      let totalViews = 0, totalCopies = 0;
-      for (const s of allSnippets) { totalViews += s.viewCount ?? 0; totalCopies += s.copyCount ?? 0; }
+      const submissionsRows = ((submissionsResult as any).rows ?? submissionsResult) as Array<{ date: string; count: number | string }>;
+      const authorRows = ((authorsResult as any).rows ?? authorsResult) as Array<{ email: string; name: string; snippet_count: number | string; views: number | string; copies: number | string; top_language: string }>;
+      const languageRows = ((languagesResult as any).rows ?? languagesResult) as Array<{ language: string; count: number | string }>;
+      const engagementRows = ((engagementResult as any).rows ?? engagementResult) as Array<{ total: number | string; total_views: number | string; total_copies: number | string; total_authors: number | string }>;
+      const engagement = engagementRows[0] ?? { total: 0, total_views: 0, total_copies: 0, total_authors: 0 };
+      const authors = authorRows.map((row) => ({
+        email: row.email,
+        name: row.name,
+        snippetCount: Number(row.snippet_count),
+        views: Number(row.views),
+        copies: Number(row.copies),
+        topLanguage: row.top_language,
+      }));
 
       res.json({
         totals: {
@@ -693,14 +722,18 @@ router.get("/admin/analytics", async (req: Request, res: Response) => {
           pending: totals.pending ?? 0,
           approved: totals.approved ?? 0,
           rejected: totals.rejected ?? 0,
-          totalViews,
-          totalCopies,
-          totalAuthors: Object.keys(authorMap).length,
+          totalViews: Number(engagement.total_views ?? 0),
+          totalCopies: Number(engagement.total_copies ?? 0),
+          totalAuthors: Number(engagement.total_authors ?? 0),
         },
-        submissionsPerDay,
-        topByEngagement,
-        topBySnippets,
-        topLanguages,
+        submissionsPerDay: submissionsRows.map((row) => ({ date: row.date, count: Number(row.count) })),
+        topByEngagement: authors
+          .map((author) => ({ ...author, score: author.views + author.copies * 2 }))
+          .slice(0, 10),
+        topBySnippets: [...authors]
+          .sort((a, b) => b.snippetCount - a.snippetCount || b.views - a.views)
+          .slice(0, 10),
+        topLanguages: languageRows.map((row) => ({ language: row.language, count: Number(row.count) })),
       });
     } catch (err) {
       logger.error(`[admin/analytics] ${(err as Error).message}`);
@@ -727,7 +760,7 @@ async function handleBroadcast(req: Request, res: Response, targetEmail?: string
     recipients = [targetEmail];
   } else {
     const authors = await db.selectDistinct({ email: snippetsTable.authorEmail }).from(snippetsTable);
-    recipients = authors.map(a => a.authorEmail).filter(Boolean);
+    recipients = authors.map(a => a.email).filter((email): email is string => Boolean(email));
   }
 
   if (recipients.length === 0) {

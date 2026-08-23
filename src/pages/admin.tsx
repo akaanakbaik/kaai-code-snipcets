@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 import { format } from "date-fns";
 import { useLocation } from "wouter";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import {
   Check, X, Shield, Trash2, Ban, Megaphone, Eye,
-  AlertCircle, Loader2, Hash, Clock, User, Mail,
+  AlertCircle, Loader2, Hash, Clock, User, Mail, ChevronLeft, ChevronRight,
   BellRing, BellOff, LogOut, Send, RefreshCw, Volume2, VolumeX,
   Key, Wifi, Activity, Plus, Pencil, ToggleLeft, ToggleRight,
   Copy, CheckCircle2, AlertTriangle, FileText, ChevronDown,
@@ -487,7 +487,7 @@ function ApiKeysTab() {
           <h2 className="text-base font-semibold">API Key Manager</h2>
           <p className="text-xs text-muted-foreground">{keys.length} key terdaftar</p>
         </div>
-        <Button size="sm" className="text-xs h-8 bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/30" onClick={() => { setFormData({ name: "", ownerEmail: "", rateLimitPerSecond: "10", rateLimitPerDay: "1000", rateLimitPerMonth: "10000" }); setCreateDialogOpen(true); }}>
+        <Button size="sm" className="text-xs h-8 bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/30" onClick={() => { setFormData({ name: "", ownerEmail: "", rateLimitPerSecond: "10", rateLimitPerDay: "1000", rateLimitPerMonth: "10000", customKey: "", editNewKey: "" }); setCreateDialogOpen(true); }}>
           <Plus className="w-3.5 h-3.5 mr-1.5" /> Buat Key Baru
         </Button>
       </div>
@@ -801,34 +801,40 @@ function SnippetControlTab() {
   const [editForm, setEditForm] = useState({ title: "", description: "", language: "", tags: "" });
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({ page: 1, limit: 30, total: 0, totalPages: 1 });
+  const [stats, setStats] = useState({ total: 0, approved: 0, pending: 0, rejected: 0, totalViews: 0, totalCopies: 0 });
 
-  const fetchSnippets = async () => {
+  const fetchSnippets = async (targetPage = page) => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/admin/all-snippets?limit=200`, { credentials: "include" });
+      const params = new URLSearchParams({ limit: "30", page: String(targetPage) });
+      if (statusFilter !== "all") params.set("status", statusFilter);
+      if (search.trim()) params.set("search", search.trim());
+      const res = await fetch(`${API_BASE}/api/admin/all-snippets?${params.toString()}`, { credentials: "include" });
       const data = await res.json();
       setSnippets(data.data || []);
+      setPagination(data.pagination || { page: targetPage, limit: 30, total: 0, totalPages: 1 });
+      setStats(data.stats || { total: 0, approved: 0, pending: 0, rejected: 0, totalViews: 0, totalCopies: 0 });
     } catch {} finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchSnippets(); }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (page !== 1) setPage(1);
+      fetchSnippets(1);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [search, statusFilter]);
+
+  useEffect(() => {
+    if (page > 1) fetchSnippets(page);
+  }, [page]);
 
   const filtered = snippets.filter((s) => {
     const q = search.toLowerCase();
-    const matchSearch = !search || s.title.toLowerCase().includes(q) || s.authorEmail.toLowerCase().includes(q) || s.language.toLowerCase().includes(q) || s.id.toLowerCase().includes(q);
-    const matchStatus = statusFilter === "all" || s.status === statusFilter;
-    return matchSearch && matchStatus;
+    return !q || s.title.toLowerCase().includes(q) || s.authorEmail.toLowerCase().includes(q) || s.language.toLowerCase().includes(q) || s.id.toLowerCase().includes(q);
   });
-
-  // Stats summary
-  const stats = {
-    total: snippets.length,
-    approved: snippets.filter((s) => s.status === "approved").length,
-    pending: snippets.filter((s) => s.status === "pending").length,
-    rejected: snippets.filter((s) => s.status === "rejected").length,
-    totalViews: snippets.reduce((acc, s) => acc + (s.viewCount || 0), 0),
-    totalCopies: snippets.reduce((acc, s) => acc + (s.copyCount || 0), 0),
-  };
 
   const handleDelete = async () => {
     if (!selected) return;
@@ -837,7 +843,7 @@ function SnippetControlTab() {
       await fetch(`${API_BASE}/api/admin/snippets/${selected.id}`, { method: "DELETE", credentials: "include" });
       toast({ title: "Snippet dihapus" });
       setDeleteOpen(false);
-      await fetchSnippets();
+      await fetchSnippets(page);
     } catch { toast({ title: "Gagal hapus", variant: "destructive" }); }
     finally { setActionLoading(null); }
   };
@@ -853,7 +859,7 @@ function SnippetControlTab() {
       if (!res.ok) throw new Error();
       toast({ title: "Snippet diperbarui ✓" });
       setEditOpen(false);
-      await fetchSnippets();
+      await fetchSnippets(page);
     } catch { toast({ title: "Gagal update", variant: "destructive" }); }
     finally { setActionLoading(null); }
   };
@@ -871,7 +877,7 @@ function SnippetControlTab() {
       const body = newStatus === "pending" ? JSON.stringify({ status: "pending" }) : undefined;
       await fetch(endpoint, { method, credentials: "include", headers: { "Content-Type": "application/json" }, body });
       toast({ title: `Status diubah → ${newStatus}` });
-      await fetchSnippets();
+      await fetchSnippets(page);
     } catch { toast({ title: "Gagal ubah status", variant: "destructive" }); }
     finally { setActionLoading(null); }
   };
@@ -913,7 +919,7 @@ function SnippetControlTab() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h2 className="text-base font-semibold">Snippet Control</h2>
-          <p className="text-xs text-muted-foreground">{filtered.length} / {snippets.length} snippet</p>
+          <p className="text-xs text-muted-foreground">{filtered.length} dari {pagination.total} snippet · halaman {pagination.page}/{pagination.totalPages}</p>
         </div>
         <div className="flex gap-1.5">
           {/* Feature 4: Export JSON */}
@@ -1010,6 +1016,17 @@ function SnippetControlTab() {
             </div>
           ))}
           {filtered.length === 0 && <div className="text-center py-8 text-muted-foreground text-sm">Tidak ada snippet yang cocok.</div>}
+        </div>
+      )}
+
+      {pagination.totalPages > 1 && (
+        <div className="flex items-center justify-between gap-3 pt-2">
+          <span className="text-xs text-muted-foreground">Menampilkan {(pagination.page - 1) * pagination.limit + (filtered.length ? 1 : 0)}–{Math.min(pagination.page * pagination.limit, pagination.total)} dari {pagination.total}</span>
+          <div className="flex items-center gap-1.5">
+            <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Halaman sebelumnya" aria-label="Halaman sebelumnya" disabled={page <= 1 || loading} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft className="w-3.5 h-3.5" /></Button>
+            <span className="min-w-16 text-center text-xs text-muted-foreground">{pagination.page} / {pagination.totalPages}</span>
+            <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Halaman berikutnya" aria-label="Halaman berikutnya" disabled={page >= pagination.totalPages || loading} onClick={() => setPage((value) => Math.min(pagination.totalPages, value + 1))}><ChevronRight className="w-3.5 h-3.5" /></Button>
+          </div>
         </div>
       )}
 
@@ -1512,9 +1529,22 @@ const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
 export default function Admin() {
   const auth = useAdminAuth();
   const [, setLocation] = useLocation();
-  const [activeTab, setActiveTab] = useState<Tab>("review");
+  const [activeTab, setActiveTab] = useState<Tab>(() => {
+    try {
+      const stored = sessionStorage.getItem("kaai-admin-tab");
+      return TABS.some((tab) => tab.id === stored) ? stored as Tab : "review";
+    } catch {
+      return "review";
+    }
+  });
+  const [visitedTabs, setVisitedTabs] = useState<Set<Tab>>(() => new Set(["review"]));
   const [notifPerm, setNotifPerm] = useState<NotificationPermission | "unsupported">("default");
   const pendingCountRef = useRef<number>(-1);
+
+  useEffect(() => {
+    try { sessionStorage.setItem("kaai-admin-tab", activeTab); } catch {}
+    setVisitedTabs((previous) => previous.has(activeTab) ? previous : new Set(previous).add(activeTab));
+  }, [activeTab]);
 
   useEffect(() => {
     if ("Notification" in window) {
@@ -1607,6 +1637,8 @@ export default function Admin() {
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
+            title={tab.label}
+            aria-label={`Buka tab ${tab.label}`}
             className={cn(
               "flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition-all whitespace-nowrap border",
               activeTab === tab.id
@@ -1620,19 +1652,20 @@ export default function Admin() {
         ))}
       </div>
 
-      {/* Tab Content */}
-      <AnimatePresence mode="wait">
-        <motion.div key={activeTab} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.15 }}>
-          {activeTab === "review" && <ReviewTab auth={auth} setLocation={setLocation} />}
-          {activeTab === "analytics" && <AnalyticsTab />}
-          {activeTab === "api-keys" && <ApiKeysTab />}
-          {activeTab === "ip-whitelist" && <IpWhitelistTab />}
-          {activeTab === "snippets" && <SnippetControlTab />}
-          {activeTab === "security" && <SecurityDashboard />}
-          {activeTab === "broadcast-logs" && <BroadcastLogsTab />}
-          {activeTab === "ban-manager" && <BanManagerTab />}
-        </motion.div>
-      </AnimatePresence>
+      <div className="relative">
+        {Array.from(visitedTabs).map((tab) => (
+          <div key={tab} className={activeTab === tab ? "animate-in fade-in-0 slide-in-from-bottom-1 duration-150" : "hidden"} aria-hidden={activeTab !== tab}>
+            {tab === "review" && <ReviewTab auth={auth} setLocation={setLocation} />}
+            {tab === "analytics" && <AnalyticsTab />}
+            {tab === "api-keys" && <ApiKeysTab />}
+            {tab === "ip-whitelist" && <IpWhitelistTab />}
+            {tab === "snippets" && <SnippetControlTab />}
+            {tab === "security" && <SecurityDashboard />}
+            {tab === "broadcast-logs" && <BroadcastLogsTab />}
+            {tab === "ban-manager" && <BanManagerTab />}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
