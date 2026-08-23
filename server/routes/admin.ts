@@ -570,6 +570,7 @@ router.put("/admin/snippets/:id", async (req: Request, res: Response) => {
         .set({ title: String(title).trim(), description: description ? String(description).trim() : snippet.description, language: String(language).toLowerCase().trim(), tags: Array.isArray(tags) ? tags : snippet.tags, updatedAt: new Date() })
         .where(eq(snippetsTable.id, String(req.params.id)))
         .returning();
+      backupSnippetRecord(updated as any).catch((err) => logger.warn(`[admin] backup sync failed: ${(err as Error).message}`));
       res.json({ ...updated, tags: updated.tags ?? [], createdAt: updated.createdAt.toISOString(), updatedAt: updated.updatedAt.toISOString() });
     } catch {
       res.status(500).json({ error: "SERVER_ERROR", message: "Failed to update snippet" });
@@ -581,7 +582,10 @@ router.put("/admin/snippets/:id", async (req: Request, res: Response) => {
 router.delete("/admin/snippets/:id", async (req: Request, res: Response) => {
   await requireAdminSession(req, res, async (req, res) => {
     try {
+      const [snippet] = await db.select().from(snippetsTable).where(eq(snippetsTable.id, String(req.params.id))).limit(1);
+      if (!snippet) { res.status(404).json({ error: "NOT_FOUND" }); return; }
       await db.delete(snippetsTable).where(eq(snippetsTable.id, String(req.params.id)));
+      backupSnippetRecord({ ...snippet, status: "deleted", updatedAt: new Date() } as any).catch((err) => logger.warn(`[admin] delete backup sync failed: ${(err as Error).message}`));
       res.json({ success: true });
     } catch {
       res.status(500).json({ error: "SERVER_ERROR", message: "Failed to delete snippet" });

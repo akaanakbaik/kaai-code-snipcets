@@ -421,8 +421,8 @@ router.get("/snippets", async (req, res) => {
     const totalNum = Number(total);
     res.json({
       data: snippets.map((s) => formatSnippet(s, { includeCode: !s.isLocked })),
-      pagination: { page, limit, total: totalNum, totalPages: Math.ceil(totalNum / limit) },
-      totalPages: Math.ceil(totalNum / limit),
+      pagination: { page, limit, total: totalNum, totalPages: Math.max(1, Math.ceil(totalNum / limit)) },
+      totalPages: Math.max(1, Math.ceil(totalNum / limit)),
     });
   } catch (err) {
     logger.error(`[snippets] List error: ${(err as Error).message}`);
