@@ -17,7 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { getLanguageBadge } from "@/lib/constants";
+import { getLanguageBadge, LANGUAGE_CONFIG } from "@/lib/constants";
 import { useToast } from "@/hooks/use-toast";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -33,6 +33,35 @@ type Snippet = {
   tags: string[]; code: string; authorName: string; authorEmail: string;
   status: string; rejectReason?: string; viewCount: number; copyCount: number; createdAt: string;
 };
+
+type AdminSort = "newest" | "oldest" | "popular" | "copies" | "az";
+type SnippetControlState = { search: string; statusFilter: string; languageFilter: string; tagFilter: string; sort: AdminSort; page: number };
+
+const ADMIN_SORT_OPTIONS: { value: AdminSort; label: string }[] = [
+  { value: "newest", label: "Terbaru" },
+  { value: "oldest", label: "Terlama" },
+  { value: "popular", label: "Terpopuler" },
+  { value: "copies", label: "Paling disalin" },
+  { value: "az", label: "A–Z" },
+];
+
+function readSnippetControlState(): SnippetControlState {
+  const fallback: SnippetControlState = { search: "", statusFilter: "all", languageFilter: "all", tagFilter: "", sort: "newest", page: 1 };
+  if (typeof window === "undefined") return fallback;
+  try {
+    const saved = JSON.parse(sessionStorage.getItem("kaai-admin-snippet-filters") || "{}") as Partial<SnippetControlState>;
+    return {
+      search: typeof saved.search === "string" ? saved.search : fallback.search,
+      statusFilter: ["all", "approved", "pending", "rejected"].includes(saved.statusFilter || "") ? saved.statusFilter! : fallback.statusFilter,
+      languageFilter: typeof saved.languageFilter === "string" ? saved.languageFilter : fallback.languageFilter,
+      tagFilter: typeof saved.tagFilter === "string" ? saved.tagFilter : fallback.tagFilter,
+      sort: ADMIN_SORT_OPTIONS.some((option) => option.value === saved.sort) ? saved.sort! : fallback.sort,
+      page: Number.isFinite(saved.page) && Number(saved.page) > 0 ? Math.floor(Number(saved.page)) : fallback.page,
+    };
+  } catch {
+    return fallback;
+  }
+}
 
 type ApiKey = {
   id: string; keyPrefix: string; name: string; ownerEmail: string; isActive: boolean;
@@ -790,10 +819,14 @@ function IpWhitelistTab() {
 
 function SnippetControlTab() {
   const { toast } = useToast();
+  const [initialFilterState] = useState<SnippetControlState>(readSnippetControlState);
   const [snippets, setSnippets] = useState<Snippet[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [search, setSearch] = useState(initialFilterState.search);
+  const [statusFilter, setStatusFilter] = useState<string>(initialFilterState.statusFilter);
+  const [languageFilter, setLanguageFilter] = useState(initialFilterState.languageFilter);
+  const [tagFilter, setTagFilter] = useState(initialFilterState.tagFilter);
+  const [sort, setSort] = useState<AdminSort>(initialFilterState.sort);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -801,15 +834,17 @@ function SnippetControlTab() {
   const [editForm, setEditForm] = useState({ title: "", description: "", language: "", tags: "" });
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(initialFilterState.page);
   const [pagination, setPagination] = useState({ page: 1, limit: 30, total: 0, totalPages: 1 });
   const [stats, setStats] = useState({ total: 0, approved: 0, pending: 0, rejected: 0, totalViews: 0, totalCopies: 0 });
 
   const fetchSnippets = async (targetPage = page) => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ limit: "30", page: String(targetPage) });
+      const params = new URLSearchParams({ limit: "30", page: String(targetPage), sort });
       if (statusFilter !== "all") params.set("status", statusFilter);
+      if (languageFilter !== "all") params.set("language", languageFilter);
+      if (tagFilter.trim()) params.set("tag", tagFilter.trim());
       if (search.trim()) params.set("search", search.trim());
       const res = await fetch(`${API_BASE}/api/admin/all-snippets?${params.toString()}`, { credentials: "include" });
       const data = await res.json();
@@ -825,16 +860,19 @@ function SnippetControlTab() {
       fetchSnippets(1);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [search, statusFilter]);
+  }, [search, statusFilter, languageFilter, tagFilter, sort]);
 
   useEffect(() => {
     if (page > 1) fetchSnippets(page);
   }, [page]);
 
-  const filtered = snippets.filter((s) => {
-    const q = search.toLowerCase();
-    return !q || s.title.toLowerCase().includes(q) || s.authorEmail.toLowerCase().includes(q) || s.language.toLowerCase().includes(q) || s.id.toLowerCase().includes(q);
-  });
+  useEffect(() => {
+    try {
+      sessionStorage.setItem("kaai-admin-snippet-filters", JSON.stringify({ search, statusFilter, languageFilter, tagFilter, sort, page }));
+    } catch {}
+  }, [search, statusFilter, languageFilter, tagFilter, sort, page]);
+
+  const filtered = snippets;
 
   const handleDelete = async () => {
     if (!selected) return;
@@ -926,7 +964,7 @@ function SnippetControlTab() {
           <Button size="sm" variant="outline" className="text-xs h-7 border-green-500/30 text-green-400 hover:bg-green-500/10" onClick={handleExportJson} disabled={filtered.length === 0} title="Export JSON">
             <Download className="w-3 h-3 mr-1" /> JSON
           </Button>
-          <Button size="sm" variant="outline" className="text-xs h-7" onClick={fetchSnippets}>
+          <Button size="sm" variant="outline" className="text-xs h-7" onClick={() => fetchSnippets(page)}>
             <RefreshCw className="w-3 h-3 mr-1" /> Refresh
           </Button>
         </div>
@@ -951,15 +989,23 @@ function SnippetControlTab() {
         </div>
       )}
 
-      {/* Filters */}
-      <div className="flex gap-2 flex-wrap">
-        <Input placeholder="Cari judul, email, bahasa, ID..." value={search} onChange={(e) => setSearch(e.target.value)} className="bg-background/50 max-w-xs h-8 text-sm" />
-        <div className="flex gap-1">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+        <Input placeholder="Cari judul, deskripsi, kode, author, tag, ID..." value={search} onChange={(e) => setSearch(e.target.value)} className="bg-background/50 h-8 text-sm lg:col-span-2" />
+        <select value={languageFilter} onChange={(e) => { setLanguageFilter(e.target.value); setPage(1); }} className="h-8 rounded-lg border border-border/50 bg-background/50 px-2 text-xs text-foreground outline-none focus:border-blue-500/40">
+          <option value="all">Semua bahasa</option>
+          {Object.entries(LANGUAGE_CONFIG).map(([value, config]) => <option key={value} value={value}>{config.label}</option>)}
+        </select>
+        <select value={sort} onChange={(e) => { setSort(e.target.value as AdminSort); setPage(1); }} className="h-8 rounded-lg border border-border/50 bg-background/50 px-2 text-xs text-foreground outline-none focus:border-blue-500/40">
+          {ADMIN_SORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </select>
+        <Input placeholder="Filter tag tepat..." value={tagFilter} onChange={(e) => { setTagFilter(e.target.value); setPage(1); }} className="bg-background/50 h-8 text-sm" />
+        <div className="flex gap-1 flex-wrap sm:col-span-2 lg:col-span-3">
           {["all", "approved", "pending", "rejected"].map((s) => (
-            <button key={s} onClick={() => setStatusFilter(s)} className={cn("px-2.5 py-1 rounded-lg text-xs border transition-all", statusFilter === s ? "bg-blue-600/20 text-blue-400 border-blue-500/30" : "bg-background/50 text-muted-foreground border-border/50 hover:text-foreground")}>
-              {s === "all" ? "Semua" : s.charAt(0).toUpperCase() + s.slice(1)}
+            <button key={s} onClick={() => { setStatusFilter(s); setPage(1); }} className={cn("px-2.5 py-1 rounded-lg text-xs border transition-all", statusFilter === s ? "bg-blue-600/20 text-blue-400 border-blue-500/30" : "bg-background/50 text-muted-foreground border-border/50 hover:text-foreground")}>
+              {s === "all" ? "Semua status" : s.charAt(0).toUpperCase() + s.slice(1)}
             </button>
           ))}
+          {(search || languageFilter !== "all" || tagFilter) && <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground" onClick={() => { setSearch(""); setLanguageFilter("all"); setTagFilter(""); setPage(1); }}>Reset filter</Button>}
         </div>
       </div>
 

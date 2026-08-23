@@ -103,14 +103,14 @@ const CROSS_LANG_MAP: Record<string, string[]> = {
   "theme": ["tema", "gaya"],
 };
 
-function expandSearchTerms(query: string): string[] {
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const expanded = new Set<string>(terms);
-  for (const term of terms) {
-    const mapped = CROSS_LANG_MAP[term];
-    if (mapped) mapped.forEach((t) => expanded.add(t));
-  }
-  return Array.from(expanded);
+function expandSearchGroups(query: string): string[][] {
+  const terms = query
+    .normalize("NFKC")
+    .toLowerCase()
+    .split(/\s+/)
+    .map((term) => term.replace(/[^a-z0-9_]+/g, ""))
+    .filter(Boolean);
+  return terms.map((term) => Array.from(new Set([term, ...(CROSS_LANG_MAP[term] ?? [])])));
 }
 
 function generateId(): string {
@@ -168,8 +168,10 @@ function verifyUnlockToken(token: string, snippetId: string): boolean {
   }
 }
 
+type SnippetForPresentation = Pick<typeof snippetsTable.$inferSelect, "id" | "slug" | "title" | "description" | "language" | "tags" | "authorName" | "status" | "rejectReason" | "viewCount" | "copyCount" | "isLocked" | "lockType" | "lockDisabledAt" | "createdAt" | "updatedAt"> & { authorEmail?: string; code?: string };
+
 function formatSnippet(
-  snippet: typeof snippetsTable.$inferSelect,
+  snippet: SnippetForPresentation,
   options: { hideEmail?: boolean; includeCode?: boolean } = {}
 ) {
   const { hideEmail = true, includeCode = true } = options;
@@ -192,7 +194,7 @@ function formatSnippet(
     updatedAt: snippet.updatedAt.toISOString(),
   };
   if (!hideEmail) result.authorEmail = snippet.authorEmail;
-  if (includeCode) result.code = snippet.code;
+  if (includeCode && snippet.code !== undefined) result.code = snippet.code;
   return result;
 }
 
@@ -383,17 +385,22 @@ router.get("/snippets", async (req, res) => {
   try {
     const conditions = [eq(snippetsTable.status, "approved")];
 
-    // Enhanced cross-language search
     if (searchQuery) {
-      const terms = expandSearchTerms(searchQuery);
-      const termConditions = terms.map((term) => or(
-        ilike(snippetsTable.title, `%${term}%`),
-        ilike(snippetsTable.description, `%${term}%`),
-        ilike(snippetsTable.authorName, `%${term}%`),
-        ilike(snippetsTable.language, `%${term}%`),
-        sql`EXISTS (SELECT 1 FROM unnest(${snippetsTable.tags}) AS t WHERE t ILIKE ${'%' + term + '%'})`,
+      const termGroups = expandSearchGroups(searchQuery);
+      const termConditions = termGroups.map((group) => or(
+        ...group.flatMap((term) => {
+          const pattern = `%${term}%`;
+          return [
+            ilike(snippetsTable.title, pattern),
+            ilike(snippetsTable.description, pattern),
+            ilike(snippetsTable.authorName, pattern),
+            ilike(snippetsTable.language, pattern),
+            ilike(snippetsTable.code, pattern),
+            sql`EXISTS (SELECT 1 FROM unnest(${snippetsTable.tags}) AS t WHERE t ILIKE ${pattern})`,
+          ];
+        }),
       ));
-      conditions.push(and(...termConditions)!);
+      if (termConditions.length > 0) conditions.push(and(...termConditions)!);
     }
 
     if (language) conditions.push(eq(snippetsTable.language, language));
@@ -406,21 +413,38 @@ router.get("/snippets", async (req, res) => {
 
     const where = and(...conditions);
     const orderBy =
-      resolvedSort === "newest"  ? [desc(snippetsTable.createdAt)] :
-      resolvedSort === "oldest"  ? [asc(snippetsTable.createdAt)] :
-      resolvedSort === "popular" ? [desc(snippetsTable.viewCount), desc(snippetsTable.copyCount)] :
-      resolvedSort === "copies"  ? [desc(snippetsTable.copyCount)] :
-      resolvedSort === "az"      ? [asc(snippetsTable.title)] :
-      [asc(snippetsTable.title)];
+      resolvedSort === "newest"  ? [desc(snippetsTable.createdAt), desc(snippetsTable.id)] :
+      resolvedSort === "oldest"  ? [asc(snippetsTable.createdAt), asc(snippetsTable.id)] :
+      resolvedSort === "popular" ? [desc(snippetsTable.viewCount), desc(snippetsTable.copyCount), asc(snippetsTable.title), asc(snippetsTable.id)] :
+      resolvedSort === "copies"  ? [desc(snippetsTable.copyCount), desc(snippetsTable.viewCount), asc(snippetsTable.title), asc(snippetsTable.id)] :
+      resolvedSort === "az"      ? [asc(snippetsTable.title), asc(snippetsTable.id)] :
+      [asc(snippetsTable.title), asc(snippetsTable.id)];
 
     const [snippets, [{ total }]] = await Promise.all([
-      db.select().from(snippetsTable).where(where).orderBy(...orderBy).limit(limit).offset(offset),
+      db.select({
+        id: snippetsTable.id,
+        slug: snippetsTable.slug,
+        title: snippetsTable.title,
+        description: snippetsTable.description,
+        language: snippetsTable.language,
+        tags: snippetsTable.tags,
+        authorName: snippetsTable.authorName,
+        status: snippetsTable.status,
+        rejectReason: snippetsTable.rejectReason,
+        viewCount: snippetsTable.viewCount,
+        copyCount: snippetsTable.copyCount,
+        isLocked: snippetsTable.isLocked,
+        lockType: snippetsTable.lockType,
+        lockDisabledAt: snippetsTable.lockDisabledAt,
+        createdAt: snippetsTable.createdAt,
+        updatedAt: snippetsTable.updatedAt,
+      }).from(snippetsTable).where(where).orderBy(...orderBy).limit(limit).offset(offset),
       db.select({ total: count() }).from(snippetsTable).where(where),
     ]);
 
     const totalNum = Number(total);
     res.json({
-      data: snippets.map((s) => formatSnippet(s, { includeCode: !s.isLocked })),
+        data: snippets.map((s) => formatSnippet(s, { includeCode: false })),
       pagination: { page, limit, total: totalNum, totalPages: Math.max(1, Math.ceil(totalNum / limit)) },
       totalPages: Math.max(1, Math.ceil(totalNum / limit)),
     });

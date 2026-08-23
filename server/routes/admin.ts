@@ -5,7 +5,7 @@ import {
   ipBansTable, emailBansTable, loginAttemptsTable,
   broadcastLogsTable, snippetsTable,
 } from "../lib/schema.js";
-import { eq, and, or, ilike, gt, desc, sum, count, inArray, sql } from "drizzle-orm";
+import { eq, and, or, ilike, gt, desc, asc, sum, count, inArray, sql } from "drizzle-orm";
 import crypto from "node:crypto";
 import {
   sendOtpEmail, sendApprovalEmail, sendRejectionEmail, sendBroadcastEmail, sendTestEmail,
@@ -421,21 +421,44 @@ router.get("/admin/pending", async (req: Request, res: Response) => {
 router.get("/admin/all-snippets", async (req: Request, res: Response) => {
   await requireAdminSession(req, res, async (req, res) => {
     const adminEmail = (req as any).adminEmail as string ?? "";
-    const status = req.query.status as string | undefined;
+    const status = String(req.query.status ?? "").trim();
     const search = String(req.query.search ?? "").trim();
+    const language = String(req.query.language ?? "").trim();
+    const tag = String(req.query.tag ?? "").trim();
+    const sort = String(req.query.sort ?? "newest").trim();
     const limit = Math.min(Number(req.query.limit) || 50, 200);
     const page = Math.max(Number(req.query.page) || 1, 1);
     const offset = (page - 1) * limit;
     try {
       const filters = [] as any[];
-      if (status && ["pending", "approved", "rejected"].includes(status)) filters.push(eq(snippetsTable.status, status as any));
+      if (["pending", "approved", "rejected"].includes(status)) filters.push(eq(snippetsTable.status, status as any));
+      if (language) filters.push(eq(snippetsTable.language, language));
+      if (tag) filters.push(sql`${snippetsTable.tags} @> ARRAY[${tag}]::text[]`);
       if (search) {
-        const pattern = `%${search}%`;
-        filters.push(or(ilike(snippetsTable.title, pattern), ilike(snippetsTable.authorEmail, pattern), ilike(snippetsTable.language, pattern), ilike(snippetsTable.id, pattern)));
+        const terms = search.normalize("NFKC").toLowerCase().split(/\s+/).map((term) => term.replace(/[^a-z0-9_]+/g, "")).filter(Boolean);
+        const termConditions = terms.map((term) => {
+          const pattern = `%${term}%`;
+          return or(
+            ilike(snippetsTable.title, pattern),
+            ilike(snippetsTable.description, pattern),
+            ilike(snippetsTable.authorName, pattern),
+            ilike(snippetsTable.authorEmail, pattern),
+            ilike(snippetsTable.language, pattern),
+            ilike(snippetsTable.id, pattern),
+            ilike(snippetsTable.code, pattern),
+            sql`EXISTS (SELECT 1 FROM unnest(${snippetsTable.tags}) AS t WHERE t ILIKE ${pattern})`,
+          );
+        });
+        if (termConditions.length > 0) filters.push(and(...termConditions));
       }
       const where = filters.length > 0 ? and(...filters) : undefined;
+      const orderBy = sort === "oldest" ? [asc(snippetsTable.createdAt), asc(snippetsTable.id)] :
+        sort === "popular" ? [desc(snippetsTable.viewCount), desc(snippetsTable.copyCount), asc(snippetsTable.title), asc(snippetsTable.id)] :
+        sort === "copies" ? [desc(snippetsTable.copyCount), desc(snippetsTable.viewCount), asc(snippetsTable.title), asc(snippetsTable.id)] :
+        sort === "az" ? [asc(snippetsTable.title), asc(snippetsTable.id)] :
+        [desc(snippetsTable.createdAt), desc(snippetsTable.id)];
       const [snippets, [{ total }], [summary]] = await Promise.all([
-        db.select().from(snippetsTable).where(where).orderBy(desc(snippetsTable.createdAt)).limit(limit).offset(offset),
+        db.select().from(snippetsTable).where(where).orderBy(...orderBy).limit(limit).offset(offset),
         db.select({ total: count() }).from(snippetsTable).where(where),
         db.select({
           total: count(),

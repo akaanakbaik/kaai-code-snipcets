@@ -456,6 +456,18 @@ async function ensureDbIndexes(): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_snippets_status_author ON snippets(status, author_email);
       CREATE INDEX IF NOT EXISTS idx_snippets_tags_gin ON snippets USING GIN(tags);
     ` as any);
+    try {
+      await db.execute(`CREATE EXTENSION IF NOT EXISTS pg_trgm` as any);
+      await db.execute(`
+        CREATE INDEX IF NOT EXISTS idx_snippets_title_trgm ON snippets USING GIN(title gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS idx_snippets_description_trgm ON snippets USING GIN(description gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS idx_snippets_author_name_trgm ON snippets USING GIN(author_name gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS idx_snippets_language_trgm ON snippets USING GIN(language gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS idx_snippets_code_trgm ON snippets USING GIN(code gin_trgm_ops);
+      ` as any);
+    } catch (err) {
+      logger.warn(`[sync] Optional trigram indexes unavailable: ${(err as Error).message}`);
+    }
     logger.info("[sync] DB indexes ensured");
   } catch (err) {
     logger.warn(`[sync] DB index creation: ${(err as Error).message}`);

@@ -17,7 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { getLanguageBadge, LANGUAGE_CONFIG } from "@/lib/constants";
 import { useDebounce } from "@/hooks/use-debounce";
 import { cn } from "@/lib/utils";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 const LIMIT_OPTIONS = [5, 10, 15, 20, 50, 100];
 const PAGE_WINDOW = 5;
@@ -309,14 +309,15 @@ export default function Home() {
     ],
   });
 
-  const [search, setSearch] = useState(() => readHomeState().search);
-  const [language, setLanguage] = useState<string>(() => readHomeState().language);
-  const [page, setPage] = useState(() => readHomeState().page);
-  const [limit, setLimit] = useState(() => readHomeState().limit);
-  const [sortBy, setSortBy] = useState<SortBy>(() => readHomeState().sortBy);
+  const [initialHomeState] = useState<HomeState>(readHomeState);
+  const [search, setSearch] = useState(initialHomeState.search);
+  const [language, setLanguage] = useState<string>(initialHomeState.language);
+  const [page, setPage] = useState(initialHomeState.page);
+  const [limit, setLimit] = useState(initialHomeState.limit);
+  const [sortBy, setSortBy] = useState<SortBy>(initialHomeState.sortBy);
   const [sortOpen, setSortOpen] = useState(false);
   const [langCatalogOpen, setLangCatalogOpen] = useState(false);
-  const [activeTags, setActiveTags] = useState<string[]>(() => readHomeState().activeTags);
+  const [activeTags, setActiveTags] = useState<string[]>(initialHomeState.activeTags);
   const [windowStart, setWindowStart] = useState(1);
   const [showTagsModal, setShowTagsModal] = useState(false);
 
@@ -338,7 +339,7 @@ export default function Home() {
   } as ListSnippetsParams;
 
   const { data, isLoading } = useListSnippets(queryParams, {
-    query: { queryKey: getListSnippetsQueryKey(queryParams) },
+    query: { queryKey: getListSnippetsQueryKey(queryParams), placeholderData: keepPreviousData },
   });
 
   const total = data?.pagination?.total ?? 0;
@@ -384,6 +385,7 @@ export default function Home() {
     setSearch("");
     setLanguage("all");
     setActiveTags([]);
+    setSortBy("az");
     setPage(1);
     setWindowStart(1);
   };
