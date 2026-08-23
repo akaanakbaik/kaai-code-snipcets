@@ -448,7 +448,7 @@ router.get("/admin/all-snippets", async (req: Request, res: Response) => {
       ]);
       res.json({
         data: snippets.map(s => formatSnippetForAdmin(s, adminEmail)),
-        pagination: { page, limit, total: Number(total ?? 0), totalPages: Math.ceil(Number(total ?? 0) / limit) },
+        pagination: { page, limit, total: Number(total ?? 0), totalPages: Math.max(1, Math.ceil(Number(total ?? 0) / limit)) },
         stats: {
           total: Number(summary?.total ?? 0),
           approved: Number(summary?.approved ?? 0),
@@ -480,7 +480,7 @@ router.get("/admin/snippets", async (req: Request, res: Response) => {
       ]);
       res.json({
         data: snippets.map(s => formatSnippetForAdmin(s, adminEmail)),
-        pagination: { page, limit, total: Number(total ?? 0), totalPages: Math.ceil(Number(total ?? 0) / limit) },
+        pagination: { page, limit, total: Number(total ?? 0), totalPages: Math.max(1, Math.ceil(Number(total ?? 0) / limit)) },
       });
     } catch {
       res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch snippets" });
