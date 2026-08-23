@@ -386,14 +386,14 @@ router.get("/snippets", async (req, res) => {
     // Enhanced cross-language search
     if (searchQuery) {
       const terms = expandSearchTerms(searchQuery);
-      const searchConditions = terms.flatMap((term) => [
+      const termConditions = terms.map((term) => or(
         ilike(snippetsTable.title, `%${term}%`),
         ilike(snippetsTable.description, `%${term}%`),
         ilike(snippetsTable.authorName, `%${term}%`),
         ilike(snippetsTable.language, `%${term}%`),
         sql`EXISTS (SELECT 1 FROM unnest(${snippetsTable.tags}) AS t WHERE t ILIKE ${'%' + term + '%'})`,
-      ]);
-      conditions.push(or(...searchConditions)!);
+      ));
+      conditions.push(and(...termConditions)!);
     }
 
     if (language) conditions.push(eq(snippetsTable.language, language));
