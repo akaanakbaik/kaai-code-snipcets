@@ -196,7 +196,7 @@ export default function Stats() {
   const displayedTags = showAllTags ? topTags : topTags.slice(0, 15);
 
   return (
-    <div className="max-w-6xl mx-auto w-full pb-12 space-y-5">
+    <div className="page-shell max-w-6xl mx-auto w-full pb-12 space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
@@ -236,7 +236,7 @@ export default function Stats() {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.04 }}
-            className="glass-card rounded-xl p-3 md:p-4 relative overflow-hidden"
+            className="glass-card rounded-2xl p-4 md:p-5 relative overflow-hidden"
           >
             <div className="absolute top-0 right-0 w-16 h-16 bg-primary/3 rounded-full blur-[20px]" />
             <div className="flex items-start justify-between relative z-10">
@@ -281,7 +281,7 @@ export default function Stats() {
                     initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: i * 0.06 }}
-                    className="group p-3 rounded-xl border border-border/30 hover:border-orange-500/30 bg-background/30 hover:bg-orange-500/5 transition-all cursor-pointer"
+                    className="group p-3.5 rounded-xl skeuo-inset hover:border-orange-500/30 hover:bg-orange-500/5 transition-all cursor-pointer"
                   >
                     <div className="flex items-start justify-between mb-2">
                       <span className={cn("text-[10px] font-bold uppercase tracking-wider", colorClass)}>{snippet.language}</span>

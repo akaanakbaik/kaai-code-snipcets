@@ -118,10 +118,10 @@ function LanguagePicker({
         width: dropPos.width,
         zIndex: 9999,
       }}
-      className="bg-card border border-border/60 rounded-xl shadow-2xl overflow-hidden"
+      className="bg-card border border-border/60 rounded-2xl shadow-2xl overflow-hidden skeuo-surface"
     >
-      <div className="p-2 border-b border-border/40">
-        <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-background/60">
+      <div className="p-2 border-b border-border/40 skeuo-inset">
+        <div className="flex items-center gap-2 px-2.5 py-2 rounded-xl skeuo-inset">
           <Search className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
           <input
             ref={searchRef}
@@ -398,7 +398,7 @@ export default function Upload() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto w-full pb-12">
+    <div className="page-shell max-w-4xl mx-auto w-full pb-12">
       <div className="mb-6">
         <h1 className="text-2xl font-heading font-bold tracking-tight text-foreground flex items-center gap-2.5">
           <UploadIcon className="w-7 h-7 text-primary" />

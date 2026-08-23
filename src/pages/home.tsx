@@ -409,7 +409,7 @@ export default function Home() {
   }
 
   return (
-    <div className="flex flex-col gap-5 w-full max-w-6xl mx-auto pb-12">
+    <div className="page-shell flex flex-col gap-6 w-full max-w-6xl mx-auto pb-12">
       {/* Tags Modal */}
       <AnimatePresence>
         {showTagsModal && (
@@ -422,7 +422,7 @@ export default function Home() {
       </AnimatePresence>
 
       {/* Hero */}
-      <section className="relative overflow-hidden rounded-xl border border-border/40 bg-card/30 backdrop-blur-sm px-5 py-4 md:px-7 md:py-5">
+      <section className="relative overflow-hidden rounded-2xl skeuo-surface px-5 py-5 md:px-7 md:py-6">
         <div className="absolute inset-0 bg-gradient-to-br from-blue-600/6 via-transparent to-blue-800/4 pointer-events-none" />
         <div className="relative z-10 flex flex-col sm:flex-row items-start sm:items-center gap-4">
           <div>
@@ -454,7 +454,7 @@ export default function Home() {
       </section>
 
       {/* Search & Filter Panel */}
-      <section className="space-y-2.5">
+      <section className="space-y-2.5 rounded-2xl skeuo-inset p-3 md:p-4">
         <div className="flex flex-col sm:flex-row gap-2.5">
           {/* Search */}
           <div className="relative flex-1">
@@ -643,10 +643,10 @@ export default function Home() {
                 >
                   <Link href={`/snippet/${(snippet as any).slug || snippet.id}`}>
                     <div
-                      className="group h-full rounded-xl glass-card overflow-hidden hover:border-blue-500/30 hover:glow-blue transition-all duration-200 cursor-pointer"
+                      className="group h-full rounded-2xl glass-card overflow-hidden hover:glow-blue transition-all duration-200 cursor-pointer"
                       data-testid={`card-snippet-${snippet.id}`}
                     >
-                      <div className="p-4 flex flex-col gap-2.5 h-full">
+                      <div className="p-4.5 flex flex-col gap-3 h-full">
                         <div className="flex items-center justify-between gap-2">
                           <Badge className={cn("px-2 py-0.5 text-[10px] font-medium rounded-md border", langConfig.color)}>
                             {langConfig.label}
@@ -679,7 +679,7 @@ export default function Home() {
                           )}
                         </div>
 
-                        <div className="flex items-center justify-between pt-2 border-t border-border/30">
+                        <div className="flex items-center justify-between pt-3 border-t border-border/30">
                           <span className="text-xs text-muted-foreground flex items-center gap-1.5">
                             <div className="w-4 h-4 rounded-full bg-blue-500/15 text-blue-400 flex items-center justify-center text-[9px] font-bold border border-blue-500/15">
                               {snippet.authorName.charAt(0).toUpperCase()}
@@ -699,7 +699,7 @@ export default function Home() {
             })}
           </div>
         ) : (
-          <div className="flex flex-col items-center justify-center py-16 text-center rounded-xl border border-dashed border-border/40 bg-card/10">
+          <div className="flex flex-col items-center justify-center py-16 text-center rounded-2xl skeuo-inset">
             <div className="w-12 h-12 rounded-xl bg-muted flex items-center justify-center mb-3">
               <Search className="w-6 h-6 text-muted-foreground opacity-40" />
             </div>

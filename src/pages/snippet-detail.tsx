@@ -631,7 +631,7 @@ export default function SnippetDetail() {
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.25 }}
-        className="max-w-5xl mx-auto w-full pb-10"
+        className="page-shell max-w-5xl mx-auto w-full pb-10"
       >
         <div className="mb-4">
           <Button variant="ghost" asChild className="pl-0 hover:bg-transparent text-muted-foreground hover:text-foreground h-8 text-xs">
@@ -640,8 +640,8 @@ export default function SnippetDetail() {
         </div>
 
         {/* Header card */}
-        <div className="glass-card rounded-xl overflow-hidden mb-4">
-          <div className="px-5 py-4 space-y-2">
+        <div className="glass-card rounded-2xl overflow-hidden mb-5">
+          <div className="px-5 py-5 md:px-6 md:py-6 space-y-3">
             <div className="flex items-start justify-between gap-3 flex-wrap">
               <div className="flex items-center gap-2 flex-wrap">
                 <Badge className={cn("px-2 py-0.5 rounded-lg border font-medium text-xs", langConfig.color)}>
@@ -707,7 +707,7 @@ export default function SnippetDetail() {
           <motion.div
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
-            className="rounded-xl border border-amber-500/30 bg-amber-500/5 flex flex-col items-center justify-center py-16 px-4 text-center gap-4"
+            className="rounded-2xl skeuo-inset border-amber-500/30 flex flex-col items-center justify-center py-16 px-4 text-center gap-4"
           >
             <div className="w-16 h-16 rounded-full bg-amber-500/10 border border-amber-500/25 flex items-center justify-center">
               <Lock className="w-8 h-8 text-amber-400" />
@@ -723,10 +723,10 @@ export default function SnippetDetail() {
             </Button>
           </motion.div>
         ) : (
-          <div className="rounded-xl border border-border/40 overflow-hidden bg-[#1e1e1e] shadow-xl">
+          <div className="rounded-2xl code-surface overflow-hidden">
             {/* Code toolbar */}
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between bg-[#252526] border-b border-white/5">
-              <div className="flex items-center gap-2 px-4 pt-2.5 pb-1 sm:py-2.5">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between bg-slate-950/75 border-b border-cyan-300/10">
+              <div className="flex items-center gap-2 px-4 pt-3 pb-1.5 sm:py-3">
                 <div className="flex gap-1.5 flex-shrink-0">
                   <div className="w-3 h-3 rounded-full bg-[#ff5f57]" />
                   <div className="w-3 h-3 rounded-full bg-[#ffbd2e]" />
@@ -739,7 +739,7 @@ export default function SnippetDetail() {
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-0.5 px-3 pb-2 sm:pb-0 sm:pr-3 flex-wrap sm:flex-nowrap">
+              <div className="flex items-center gap-1 px-3 pb-2 sm:pb-0 sm:pr-3 flex-wrap sm:flex-nowrap">
                 <button
                   onClick={handleOpenRaw}
                   className="h-7 px-2 sm:px-2.5 text-xs text-[#858585] hover:text-[#cccccc] hover:bg-white/5 rounded transition-colors flex items-center gap-1 flex-shrink-0"
@@ -808,7 +808,7 @@ export default function SnippetDetail() {
             </div>
 
             {/* Code footer */}
-            <div className="flex items-center justify-between px-4 py-1.5 bg-[#007acc] text-white text-[10px] font-mono">
+            <div className="flex items-center justify-between px-4 py-2 bg-cyan-500/15 text-cyan-200 text-[10px] font-mono border-t border-cyan-300/15">
               <span>{langConfig.label}</span>
               <span>{displayCode.split("\n").length} baris &middot; {displayCode.length.toLocaleString()} karakter</span>
             </div>

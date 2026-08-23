@@ -92,20 +92,20 @@ export default function AdminLogin() {
   const formatTime = (s: number) => `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
 
   return (
-    <div className="min-h-[80vh] flex items-center justify-center w-full">
+    <div className="page-shell min-h-[80vh] flex items-center justify-center w-full">
       <motion.div
         initial={{ opacity: 0, y: 20, scale: 0.97 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.35 }}
-        className="w-full max-w-md"
+        className="w-full max-w-md px-1"
       >
-        <div className="glass-card rounded-2xl p-8 relative overflow-hidden">
+        <div className="glass-card rounded-2xl p-6 md:p-8 relative overflow-hidden">
           <div className="absolute top-0 right-0 w-40 h-40 bg-blue-500/5 rounded-full blur-[60px] pointer-events-none" />
           <div className="absolute bottom-0 left-0 w-40 h-40 bg-blue-600/5 rounded-full blur-[60px] pointer-events-none" />
 
           <div className="relative z-10">
             <div className="flex flex-col items-center text-center mb-8">
-              <div className="w-14 h-14 rounded-2xl bg-blue-600/10 border border-blue-500/20 flex items-center justify-center mb-4 glow-blue">
+              <div className="w-14 h-14 rounded-2xl bg-cyan-400/10 border border-cyan-300/25 flex items-center justify-center mb-4 glow-blue">
                 <Shield className="w-7 h-7 text-blue-400" />
               </div>
               <h1 className="text-2xl font-heading font-bold text-foreground">Admin Login</h1>
@@ -155,7 +155,7 @@ export default function AdminLogin() {
 
                   <Button
                     type="submit"
-                    className="w-full h-11 bg-blue-600 hover:bg-blue-500 text-white glow-blue"
+                    className="w-full h-11 bg-cyan-400 text-slate-950 hover:bg-cyan-300 glow-blue"
                     disabled={loading}
                     data-testid="btn-send-otp"
                   >
@@ -214,7 +214,7 @@ export default function AdminLogin() {
 
                   <Button
                     type="submit"
-                    className="w-full h-11 bg-blue-600 hover:bg-blue-500 text-white glow-blue"
+                    className="w-full h-11 bg-cyan-400 text-slate-950 hover:bg-cyan-300 glow-blue"
                     disabled={loading || otp.length !== 5}
                     data-testid="btn-verify-otp"
                   >

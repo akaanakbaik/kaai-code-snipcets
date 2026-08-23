@@ -9,7 +9,7 @@ export default function Terms() {
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
-      className="max-w-4xl mx-auto w-full pb-16"
+      className="page-shell max-w-4xl mx-auto w-full pb-16"
     >
       <div className="mb-6">
         <Button variant="ghost" asChild className="pl-0 hover:bg-transparent hover:text-primary text-muted-foreground">
@@ -17,7 +17,7 @@ export default function Terms() {
         </Button>
       </div>
 
-      <div className="glass-card rounded-2xl p-8 md:p-12">
+      <div className="glass-card rounded-2xl p-6 md:p-10 lg:p-12">
         <div className="flex items-center gap-3 mb-8">
           <div className="w-10 h-10 rounded-xl bg-blue-600/10 border border-blue-500/20 flex items-center justify-center">
             <FileText className="w-5 h-5 text-blue-400" />
@@ -128,7 +128,7 @@ export default function Terms() {
             <p className="text-sm leading-relaxed">
               Jika Anda memiliki pertanyaan mengenai syarat dan ketentuan ini, silakan hubungi kami melalui:
             </p>
-            <div className="p-4 rounded-xl bg-blue-500/5 border border-blue-500/15">
+            <div className="p-4 rounded-xl skeuo-inset border-blue-500/15">
               <p className="text-sm">Layanan aduan dan balasan: <a href="https://t.me/akamodebaik" target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">t.me/akamodebaik</a></p>
               <p className="text-sm mt-1">Website: <a href="https://akadev.me" target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">akadev.me</a></p>
             </div>

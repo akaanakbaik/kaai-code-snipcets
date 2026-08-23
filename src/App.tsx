@@ -11,8 +11,8 @@ import Layout from "@/components/layout";
 
 // Critical routes — eager loaded (visible on first paint)
 import Home from "@/pages/home";
-import Upload from "@/pages/upload";
-import SnippetDetail from "@/pages/snippet-detail";
+const Upload = lazy(() => import("@/pages/upload"));
+const SnippetDetail = lazy(() => import("@/pages/snippet-detail"));
 
 // Non-critical routes — lazy loaded (reduces initial bundle ~40%)
 const Admin = lazy(() => import("@/pages/admin"));
@@ -36,10 +36,10 @@ const queryClient = new QueryClient({
 function PageLoader() {
   return (
     <div className="space-y-4 p-6 max-w-5xl mx-auto w-full">
-      <Skeleton className="h-8 w-48 rounded-lg" />
-      <Skeleton className="h-4 w-full" />
-      <Skeleton className="h-4 w-3/4" />
-      <Skeleton className="h-64 w-full rounded-xl" />
+      <Skeleton className="h-8 w-48 rounded-lg skeleton-sheen" />
+      <Skeleton className="h-4 w-full skeleton-sheen" />
+      <Skeleton className="h-4 w-3/4 skeleton-sheen" />
+      <Skeleton className="h-64 w-full rounded-xl skeleton-sheen" />
     </div>
   );
 }
@@ -59,8 +59,8 @@ function Router() {
         <Layout>
           <Switch>
             <Route path="/" component={Home} />
-            <Route path="/upload" component={Upload} />
-            <Route path="/snippet/:id" component={SnippetDetail} />
+            <Route path="/upload"><Suspense fallback={<PageLoader />}><Upload /></Suspense></Route>
+            <Route path="/snippet/:id"><Suspense fallback={<PageLoader />}><SnippetDetail /></Suspense></Route>
             <Route path="/admin/login">
               <Suspense fallback={<PageLoader />}><AdminLogin /></Suspense>
             </Route>

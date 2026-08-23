@@ -5,7 +5,7 @@ import { Code2, Key, Shield, Zap, BookOpen, AlertTriangle, CheckCircle2 } from "
 
 function CodeBlock({ children, lang = "bash" }: { children: string; lang?: string }) {
   return (
-    <pre className="bg-zinc-900/80 border border-border/50 rounded-lg p-4 overflow-x-auto text-sm text-zinc-200 font-mono my-2">
+    <pre className="code-surface rounded-xl p-4 overflow-x-auto text-sm text-zinc-200 font-mono my-2">
       <code>{children}</code>
     </pre>
   );
@@ -22,7 +22,7 @@ function SectionTitle({ icon: Icon, title }: { icon: React.ElementType; title: s
 
 export default function Docs() {
   return (
-    <div className="max-w-3xl mx-auto py-8 space-y-10">
+    <div className="page-shell max-w-3xl mx-auto py-8 space-y-10">
       {/* Header */}
       <div>
         <div className="flex items-center gap-2 mb-2">
@@ -39,7 +39,7 @@ export default function Docs() {
         </div>
       </div>
 
-      <Separator />
+      <Separator className="bg-border/70" />
 
       {/* Base URL */}
       <section>
@@ -61,7 +61,7 @@ export default function Docs() {
         <CodeBlock>{`curl -H "X-API-Key: kaai_your_key_here" \\
   https://codes-snippet.kaai.my.id/api/snippets`}</CodeBlock>
 
-        <Card className="mt-4 border-amber-500/20 bg-amber-500/5">
+        <Card className="mt-4 skeuo-inset border-amber-500/20 bg-amber-500/5">
           <CardContent className="pt-4 flex gap-3">
             <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
             <p className="text-sm text-muted-foreground">
@@ -84,7 +84,7 @@ export default function Docs() {
             { label: "Per Day", value: "1,000 req" },
             { label: "Per Month", value: "10,000 req" },
           ].map((item) => (
-            <Card key={item.label} className="border-border/50">
+            <Card key={item.label} className="glass-card border-0">
               <CardContent className="pt-4 text-center">
                 <p className="text-lg font-bold text-blue-400">{item.value}</p>
                 <p className="text-xs text-muted-foreground">{item.label}</p>
@@ -103,7 +103,7 @@ export default function Docs() {
         <SectionTitle icon={BookOpen} title="Endpoints" />
 
         {/* GET /snippets */}
-        <Card className="border-border/50 mb-4">
+        <Card className="glass-card border-0 mb-4">
           <CardHeader className="pb-2">
             <div className="flex items-center gap-2">
               <Badge className="bg-green-600/20 text-green-400 border-green-500/30">GET</Badge>
@@ -159,7 +159,7 @@ export default function Docs() {
         </Card>
 
         {/* GET /snippets/:id */}
-        <Card className="border-border/50 mb-4">
+        <Card className="glass-card border-0 mb-4">
           <CardHeader className="pb-2">
             <div className="flex items-center gap-2">
               <Badge className="bg-green-600/20 text-green-400 border-green-500/30">GET</Badge>
@@ -176,7 +176,7 @@ export default function Docs() {
         </Card>
 
         {/* GET /snippets/popular */}
-        <Card className="border-border/50 mb-4">
+        <Card className="glass-card border-0 mb-4">
           <CardHeader className="pb-2">
             <div className="flex items-center gap-2">
               <Badge className="bg-green-600/20 text-green-400 border-green-500/30">GET</Badge>
@@ -193,7 +193,7 @@ export default function Docs() {
         </Card>
 
         {/* GET /snippets/tags */}
-        <Card className="border-border/50 mb-4">
+        <Card className="glass-card border-0 mb-4">
           <CardHeader className="pb-2">
             <div className="flex items-center gap-2">
               <Badge className="bg-green-600/20 text-green-400 border-green-500/30">GET</Badge>
@@ -210,7 +210,7 @@ export default function Docs() {
         </Card>
 
         {/* POST /snippets */}
-        <Card className="border-border/50 mb-4">
+        <Card className="glass-card border-0 mb-4">
           <CardHeader className="pb-2">
             <div className="flex items-center gap-2">
               <Badge className="bg-blue-600/20 text-blue-400 border-blue-500/30">POST</Badge>
@@ -238,7 +238,7 @@ export default function Docs() {
         </Card>
 
         {/* GET /stats */}
-        <Card className="border-border/50 mb-4">
+        <Card className="glass-card border-0 mb-4">
           <CardHeader className="pb-2">
             <div className="flex items-center gap-2">
               <Badge className="bg-green-600/20 text-green-400 border-green-500/30">GET</Badge>
@@ -261,7 +261,7 @@ export default function Docs() {
         </Card>
 
         {/* GET /healthz */}
-        <Card className="border-border/50 mb-4">
+        <Card className="glass-card border-0 mb-4">
           <CardHeader className="pb-2">
             <div className="flex items-center gap-2">
               <Badge className="bg-green-600/20 text-green-400 border-green-500/30">GET</Badge>

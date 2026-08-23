@@ -18,11 +18,11 @@ function SidebarContent({ onItemClick }: { onItemClick?: () => void }) {
   return (
     <div className="flex flex-col h-full">
       {/* Logo */}
-      <div className="px-5 py-5 flex items-center gap-3 border-b border-border/50">
+      <div className="mx-1 mt-1 mb-3 px-4 py-4 flex items-center gap-3 rounded-2xl skeuo-surface">
         <img
           src={LOGO_URL}
           alt="Kaai"
-          className="w-9 h-9 rounded-xl object-contain bg-blue-950/40 border border-blue-800/30 p-0.5"
+          className="w-10 h-10 rounded-xl object-contain bg-slate-950/70 border border-cyan-400/20 p-1 shadow-[inset_2px_2px_5px_rgba(0,0,0,.45),2px_2px_5px_rgba(0,0,0,.3)]"
           onError={(e) => {
             (e.target as HTMLImageElement).style.display = "none";
           }}
@@ -34,21 +34,21 @@ function SidebarContent({ onItemClick }: { onItemClick?: () => void }) {
       </div>
 
       {/* Nav */}
-      <nav className="flex flex-col gap-1 px-3 pt-5 flex-1">
+      <nav className="flex flex-col gap-2 px-2 pt-3 flex-1">
         {NAV_ITEMS.map((item) => {
           const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href));
           return (
             <Link key={item.href} href={item.href} onClick={onItemClick}>
               <div
                 className={cn(
-                  "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-150 cursor-pointer text-sm",
+                  "flex items-center gap-3 px-3.5 py-3 rounded-xl transition-all duration-160 cursor-pointer text-sm",
                   isActive
-                    ? "bg-blue-600/15 text-blue-400 font-medium border border-blue-500/20"
-                    : "text-muted-foreground hover:bg-white/5 hover:text-foreground",
+                    ? "bg-cyan-400/10 text-cyan-300 font-medium border border-cyan-300/25 shadow-[inset_3px_3px_7px_rgba(0,0,0,.25),2px_2px_5px_rgba(0,0,0,.25)]"
+                    : "text-muted-foreground hover:bg-white/[0.045] hover:text-foreground hover:translate-x-0.5",
                 )}
                 data-testid={`nav-${item.label.toLowerCase()}`}
               >
-                <item.icon className={cn("w-4 h-4 flex-shrink-0", isActive && "text-blue-400")} />
+                <item.icon className={cn("w-4 h-4 flex-shrink-0", isActive && "text-cyan-300")} />
                 {item.label}
               </div>
             </Link>
@@ -57,14 +57,14 @@ function SidebarContent({ onItemClick }: { onItemClick?: () => void }) {
       </nav>
 
       {/* Admin button at bottom - small */}
-      <div className="px-3 pb-3">
+      <div className="px-2 pb-3">
         <Link href="/admin" onClick={onItemClick}>
           <div
             className={cn(
-              "flex items-center gap-2 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer text-xs",
+              "flex items-center gap-2 px-3 py-2.5 rounded-xl transition-all duration-160 cursor-pointer text-xs",
               location === "/admin" || location.startsWith("/admin")
-                ? "bg-blue-600/10 text-blue-400 border border-blue-500/20"
-                : "text-muted-foreground/60 hover:text-muted-foreground hover:bg-white/5",
+                ? "bg-cyan-400/10 text-cyan-300 border border-cyan-300/20 shadow-[inset_2px_2px_6px_rgba(0,0,0,.25)]"
+                : "text-muted-foreground/60 hover:text-muted-foreground hover:bg-white/[0.045]",
             )}
             data-testid="nav-admin"
           >
@@ -75,7 +75,7 @@ function SidebarContent({ onItemClick }: { onItemClick?: () => void }) {
       </div>
 
       {/* Footer */}
-      <div className="px-5 py-4 border-t border-border/50">
+      <div className="mx-1 mb-1 px-4 py-4 rounded-2xl skeuo-inset">
         <div className="flex flex-col gap-2">
           <div className="flex gap-3 text-xs text-muted-foreground/60">
             <Link href="/terms" onClick={onItemClick} className="hover:text-muted-foreground transition-colors">Terms</Link>
@@ -129,7 +129,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen w-full bg-background">
       {/* Desktop Sidebar */}
-      <aside className="hidden md:flex flex-col w-60 border-r border-border/50 bg-card/20 backdrop-blur-xl fixed inset-y-0 z-50">
+      <aside className="hidden md:flex flex-col w-64 p-3 bg-sidebar/95 border-r border-sidebar-border/70 fixed inset-y-0 z-50 shadow-[14px_0_30px_rgba(0,0,0,.22)]">
         <SidebarContent />
       </aside>
 
@@ -145,13 +145,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       {/* Mobile Sidebar Drawer */}
       <div
         className={cn(
-          "fixed inset-y-0 left-0 z-50 w-64 bg-card border-r border-border/50 md:hidden transition-transform duration-300",
+          "fixed inset-y-0 left-0 z-50 w-72 bg-sidebar border-r border-sidebar-border/70 md:hidden transition-transform duration-200 shadow-[14px_0_30px_rgba(0,0,0,.3)]",
           open ? "translate-x-0" : "-translate-x-full",
         )}
       >
         <button
           onClick={() => setOpen(false)}
-          className="absolute right-3 top-4 p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-white/10 transition-colors"
+          className="absolute right-3 top-4 p-2 rounded-xl skeuo-button text-muted-foreground hover:text-foreground"
         >
           <X className="w-4 h-4" />
         </button>
@@ -159,9 +159,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col md:ml-60 w-full">
+      <div className="flex-1 flex flex-col md:ml-64 w-full">
         {/* Mobile Header */}
-        <header className="h-14 flex items-center justify-between px-4 border-b border-border/50 bg-background/80 backdrop-blur-xl sticky top-0 z-40 md:hidden">
+        <header className="h-16 flex items-center justify-between px-4 glass-panel sticky top-0 z-40 md:hidden">
           <button
             onClick={() => setOpen(true)}
             className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-white/10 transition-colors"
@@ -174,12 +174,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </header>
 
         {/* Page Content */}
-        <main className="flex-1 p-4 md:p-8 max-w-7xl mx-auto w-full">
+        <main className="flex-1 p-4 md:p-8 lg:p-10 max-w-7xl mx-auto w-full">
           {children}
         </main>
 
         {/* Mobile Footer */}
-        <footer className="md:hidden py-4 px-4 border-t border-border/50 text-center text-xs text-muted-foreground/50">
+        <footer className="md:hidden py-5 px-4 mt-4 border-t border-border/50 text-center text-xs text-muted-foreground/50">
           <div className="flex justify-center gap-4 mb-1">
             <Link href="/terms" className="hover:text-muted-foreground transition-colors">Terms</Link>
             <span>·</span>

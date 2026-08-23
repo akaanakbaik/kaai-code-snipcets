@@ -1571,7 +1571,7 @@ export default function Admin() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto w-full pb-12 space-y-5">
+    <div className="page-shell max-w-6xl mx-auto w-full pb-12 space-y-6">
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
         <div>
@@ -1602,16 +1602,16 @@ export default function Admin() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 overflow-x-auto pb-1">
+      <div className="flex gap-1.5 overflow-x-auto pb-2 -mx-1 px-1">
         {TABS.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className={cn(
-              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap border",
+              "flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition-all whitespace-nowrap border",
               activeTab === tab.id
-                ? "bg-blue-600/15 text-blue-400 border-blue-500/25"
-                : "bg-background/50 text-muted-foreground border-border/50 hover:text-foreground hover:bg-white/5",
+                ? "bg-cyan-400/10 text-cyan-300 border-cyan-300/25 shadow-[inset_3px_3px_7px_rgba(0,0,0,.24),2px_2px_5px_rgba(0,0,0,.18)]"
+                : "skeuo-button text-muted-foreground hover:text-foreground",
             )}
           >
             <tab.icon className="w-3.5 h-3.5" />
