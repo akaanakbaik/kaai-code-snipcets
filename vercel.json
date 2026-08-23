@@ -3,6 +3,7 @@
   "outputDirectory": "dist",
   "installCommand": "npm install --include=dev",
   "framework": null,
+  "crons": [{ "path": "/api/cron/sync", "schedule": "0 0 * * *" }],
   "functions": {
     "api/index.js": {
       "includeFiles": "_server/**",

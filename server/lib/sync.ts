@@ -159,7 +159,7 @@ async function directSyncSupabase2(pool: Pool, snippets: SnippetRow[]): Promise<
   }
 }
 
-async function runSync(): Promise<void> {
+export async function runSync(): Promise<void> {
   try {
     const snippets = await db.select().from(snippetsTable).where(eq(snippetsTable.status, "approved"));
     if (snippets.length === 0) { logger.info("[sync] No approved snippets to sync"); return; }
