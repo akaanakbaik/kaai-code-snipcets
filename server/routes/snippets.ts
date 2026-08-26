@@ -520,6 +520,55 @@ router.post("/snippets", async (req, res) => {
   }
 });
 
+router.get("/snippets/export", async (req, res) => {
+  const parsed = ListSnippetsQuery.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "VALIDATION_ERROR", message: "Invalid query params" });
+    return;
+  }
+
+  const { page, limit } = parsed.data;
+  const offset = (page - 1) * limit;
+  const where = and(eq(snippetsTable.status, "approved"), eq(snippetsTable.isLocked, false));
+
+  try {
+    const [snippets, [{ total }]] = await Promise.all([
+      db.select({
+        id: snippetsTable.id,
+        slug: snippetsTable.slug,
+        title: snippetsTable.title,
+        description: snippetsTable.description,
+        language: snippetsTable.language,
+        tags: snippetsTable.tags,
+        code: snippetsTable.code,
+        authorName: snippetsTable.authorName,
+        status: snippetsTable.status,
+        rejectReason: snippetsTable.rejectReason,
+        viewCount: snippetsTable.viewCount,
+        copyCount: snippetsTable.copyCount,
+        isLocked: snippetsTable.isLocked,
+        lockType: snippetsTable.lockType,
+        lockDisabledAt: snippetsTable.lockDisabledAt,
+        createdAt: snippetsTable.createdAt,
+        updatedAt: snippetsTable.updatedAt,
+      }).from(snippetsTable).where(where).orderBy(asc(snippetsTable.createdAt), asc(snippetsTable.id)).limit(limit).offset(offset),
+      db.select({ total: count() }).from(snippetsTable).where(where),
+    ]);
+
+    const totalNum = Number(total);
+    const totalPages = Math.max(1, Math.ceil(totalNum / limit));
+    res.set("Cache-Control", "public, max-age=30, s-maxage=30, stale-while-revalidate=60");
+    res.json({
+      data: snippets.map((snippet) => formatSnippet(snippet, { includeCode: true })),
+      pagination: { page, limit, total: totalNum, totalPages },
+      totalPages,
+    });
+  } catch (err) {
+    logger.error(`[snippets] Export error: ${(err as Error).message}`);
+    res.status(500).json({ error: "SERVER_ERROR", message: "Failed to export snippets" });
+  }
+});
+
 // GET /api/snippets/:id — supports both ID and slug lookup
 router.get("/snippets/:id", async (req: Request, res: Response) => {
   try {

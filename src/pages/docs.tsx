@@ -117,12 +117,12 @@ export default function Docs() {
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Query Parameters</p>
             <div className="space-y-1 text-sm mb-3">
               {[
-                { name: "search", type: "string", desc: "Search by title, description, author, or language" },
+                { name: "search", type: "string", desc: "Search by title, description, author, language, tag, or code" },
                 { name: "language", type: "string", desc: "Filter by programming language" },
                 { name: "tag", type: "string", desc: "Filter by tag" },
-                { name: "sortBy", type: "popular | latest | az", desc: "Sort order (default: popular)" },
+                { name: "sortBy", type: "string", desc: "Sort order (default: popular)" },
                 { name: "page", type: "number", desc: "Page number (default: 1)" },
-                { name: "limit", type: "number", desc: "Results per page, max 50 (default: 12)" },
+                { name: "limit", type: "number", desc: "Results per page, max 100 (default: 12)" },
               ].map((p) => (
                 <div key={p.name} className="flex gap-2">
                   <code className="text-blue-300 w-28 flex-shrink-0">{p.name}</code>
@@ -141,20 +141,43 @@ export default function Docs() {
       "title": "Debounce Hook",
       "description": "Custom React hook...",
       "language": "TypeScript",
-      "tags": ["react", "hooks"],
-      "code": "...",
-      "authorName": "Developer",
-      "status": "approved",
-      "viewCount": 42,
-      "copyCount": 7,
-      "createdAt": "2026-04-01T12:00:00Z"
-    }
-  ],
-  "total": 42,
-  "page": 1,
-  "limit": 12,
-  "totalPages": 4
-}`}</CodeBlock>
+              "tags": ["react", "hooks"],
+              "authorName": "Developer",
+              "status": "approved",
+              "viewCount": 42,
+              "copyCount": 7,
+              "createdAt": "2026-04-01T12:00:00Z"
+            }
+          ],
+          "pagination": {
+            "page": 1,
+            "limit": 12,
+            "total": 42,
+            "totalPages": 4
+          },
+          "totalPages": 4
+        }`}</CodeBlock>
+          </CardContent>
+        </Card>
+
+        <Card className="glass-card border-0 mb-4">
+          <CardHeader className="pb-2">
+            <div className="flex items-center gap-2">
+              <Badge className="bg-green-600/20 text-green-400 border-green-500/30">GET</Badge>
+              <code className="text-sm font-mono text-foreground">/api/snippets/export</code>
+            </div>
+            <CardTitle className="text-sm text-muted-foreground font-normal mt-1">
+              Export approved and unlocked snippets with complete code for server-side integrations.
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground mb-3">
+              This read-only endpoint returns the full <code className="bg-zinc-900 px-1 rounded text-blue-300">code</code> field for every item in the requested page. Only approved and unlocked snippets are included.
+            </p>
+            <CodeBlock>{`curl "https://codes-snippet.kaai.my.id/api/snippets/export?page=1&limit=50"`}</CodeBlock>
+            <p className="text-xs text-muted-foreground mt-3">
+              Process every page from <code className="bg-zinc-900 px-1 rounded text-blue-300">pagination.totalPages</code>. Do not use write endpoints for an export.
+            </p>
           </CardContent>
         </Card>
 

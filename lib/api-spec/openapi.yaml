@@ -97,6 +97,40 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /snippets/export:
+    get:
+      operationId: exportSnippets
+      tags: [snippets]
+      summary: Export approved snippets with complete code
+      description: Returns approved and unlocked snippets with their complete code. Read-only endpoint intended for server-side integrations.
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        "200":
+          description: Paginated full-code export
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnippetExportResponse"
+        "401":
+          description: API key required or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /snippets/{id}:
     get:
       operationId: getSnippet
@@ -255,6 +289,11 @@ paths:
                   $ref: "#/components/schemas/Snippet"
 
 components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
   schemas:
     HealthStatus:
       type: object
@@ -309,6 +348,96 @@ components:
         - status
         - createdAt
         - updatedAt
+
+    FullSnippet:
+      type: object
+      properties:
+        id:
+          type: string
+        slug:
+          type: string
+          nullable: true
+        title:
+          type: string
+        description:
+          type: string
+        language:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        code:
+          type: string
+        authorName:
+          type: string
+        status:
+          type: string
+          enum: [approved]
+        viewCount:
+          type: integer
+        copyCount:
+          type: integer
+        isLocked:
+          type: boolean
+          enum: [false]
+        lockType:
+          type: string
+          nullable: true
+        lockDisabledAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - title
+        - description
+        - language
+        - tags
+        - code
+        - authorName
+        - status
+        - viewCount
+        - copyCount
+        - isLocked
+        - createdAt
+        - updatedAt
+
+    SnippetExportResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/FullSnippet"
+        pagination:
+          type: object
+          properties:
+            page:
+              type: integer
+            limit:
+              type: integer
+            total:
+              type: integer
+            totalPages:
+              type: integer
+          required:
+            - page
+            - limit
+            - total
+            - totalPages
+        totalPages:
+          type: integer
+      required:
+        - data
+        - pagination
+        - totalPages
 
     SnippetListResponse:
       type: object
