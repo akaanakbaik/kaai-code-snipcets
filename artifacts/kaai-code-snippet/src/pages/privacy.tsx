@@ -165,7 +165,7 @@ export default function Privacy() {
             </p>
             <div className="p-4 rounded-xl bg-blue-500/5 border border-blue-500/15 space-y-2">
               <p className="text-sm">Layanan aduan dan balasan: <a href="https://t.me/akamodebaik" target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">t.me/akamodebaik</a></p>
-              <p className="text-sm">Website: <a href="https://akadev.me" target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">akadev.me</a></p>
+              <p className="text-sm">Website: <a href="https://akaa.dev" target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">akaa.dev</a></p>
             </div>
           </section>
         </div>

@@ -61,7 +61,7 @@ const FOOTER = `
 </p>
 <p style="color:#64748b;font-size:12px;margin:4px 0">
   &copy; ${new Date().getFullYear()} Kaai Code Snippet &mdash; by
-  <a href="https://akadev.me" style="color:#3b82f6">aka</a>
+  <a href="https://akaa.dev" style="color:#3b82f6">aka</a>
 </p>
 `;
 

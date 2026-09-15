@@ -409,7 +409,7 @@ async function backupToGithub(): Promise<void> {
     const body: Record<string, unknown> = {
       message: `backup: auto sync ${new Date().toISOString().slice(0, 16)}`,
       content,
-      committer: { name: "Kaai Bot", email: "kaai-bot@akadev.me" },
+      committer: { name: "Kaai Bot", email: "kaai-bot@akaa.dev" },
     };
     if (sha) body.sha = sha;
 

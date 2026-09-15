@@ -86,7 +86,7 @@ function SidebarContent({ onItemClick }: { onItemClick?: () => void }) {
           </div>
           <p className="text-[11px] text-muted-foreground/50">
             made by{" "}
-            <a href="https://akadev.me" target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 hover:text-muted-foreground transition-colors">
+            <a href="https://akaa.dev" target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 hover:text-muted-foreground transition-colors">
               <span className="text-red-500 font-bold">a</span>
               <span className="font-bold">ka</span>
             </a>{" "}
@@ -188,7 +188,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <Link href="/docs" className="hover:text-muted-foreground transition-colors">Docs</Link>
           </div>
           made by{" "}
-          <a href="https://akadev.me" target="_blank" rel="noreferrer" className="inline-flex items-center">
+          <a href="https://akaa.dev" target="_blank" rel="noreferrer" className="inline-flex items-center">
             <span className="text-red-500 font-bold">a</span>
             <span className="font-bold text-foreground/70">ka</span>
           </a>{" "}
